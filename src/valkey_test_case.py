@@ -19,6 +19,7 @@ MAX_REPLICA_WAIT_TIME = 120
 MAX_SYNC_WAIT = 90
 MAX_PING_WAIT_TIME = 30
 
+
 # Return true if the specified string is present in the provided file
 def verify_string_in_file(string, filename):
     if not os.path.exists(filename):
@@ -29,6 +30,7 @@ def verify_string_in_file(string, filename):
             if string in line:
                 return True
     return False
+
 
 # Return true if the any of the strings is present in the provided file
 def verify_any_of_strings_in_file(strings, filename):
@@ -42,25 +44,31 @@ def verify_any_of_strings_in_file(strings, filename):
                     return True
     return False
 
+
 class ExpectException(Exception):
     def __init__(self, lhs, op, rhs):
         self.lhs = lhs
         self.op = op
         self.rhs = rhs
 
+
 def expect(lhs, op, rhs):
     if not op(lhs, rhs):
         raise ExpectException(lhs, op, rhs)
 
+
 class ValkeyAction(Enum):
     AOF_REWRITE = 1
 
+
 class ValkeyServerHandle(object):
     """Handle to a valkey server process"""
-    
+
     DEFAULT_BIND_IP = "0.0.0.0"
 
-    def __init__(self, bind_ip, port, port_tracker, server_path='valkey-server', cwd='.'):
+    def __init__(
+        self, bind_ip, port, port_tracker, server_path="valkey-server", cwd="."
+    ):
         self.server = None
         self.client = None
         self.port = port
@@ -76,9 +84,9 @@ class ValkeyServerHandle(object):
     @classmethod
     def create_from_server(self, server, db=0):
         logging.info(("Created regular client for port {}".format(server.port)))
-        r = StrictValkey(host='localhost', port=server.port, db=db)
+        r = StrictValkey(host="localhost", port=server.port, db=db)
         return r
-    
+
     def set_startup_args(self, args):
         self.args.update(args)
 
@@ -88,7 +96,7 @@ class ValkeyServerHandle(object):
     def exit(self, cleanup=True, remove_nodes_conf=True):
         if self.client:
             try:
-                self.client.shutdown('nosave')
+                self.client.shutdown("nosave")
             except:
                 logging.warning("SHUTDOWN was unsuccessful")
 
@@ -98,20 +106,34 @@ class ValkeyServerHandle(object):
             self._waitForExit()
             self.server = None
 
-        if os.environ.get('SKIPLOGCLEAN') == None:
-            if "logfile" in self.args and os.path.exists(os.path.join(self.cwd, self.args["logfile"])):
+        if os.environ.get("SKIPLOGCLEAN") == None:
+            if "logfile" in self.args and os.path.exists(
+                os.path.join(self.cwd, self.args["logfile"])
+            ):
                 os.remove(os.path.join(self.cwd, self.args["logfile"]))
 
-            if cleanup and "appenddirname" in self.args and os.path.exists(os.path.join(self.cwd, self.args["appenddirname"])):
+            if (
+                cleanup
+                and "appenddirname" in self.args
+                and os.path.exists(os.path.join(self.cwd, self.args["appenddirname"]))
+            ):
                 shutil.rmtree(os.path.join(self.cwd, self.args["appenddirname"]))
 
-        if cleanup and "dbfilename" in self.args and os.path.exists(os.path.join(self.cwd, self.args["dbfilename"])):
+        if (
+            cleanup
+            and "dbfilename" in self.args
+            and os.path.exists(os.path.join(self.cwd, self.args["dbfilename"]))
+        ):
             try:
                 os.remove(os.path.join(self.cwd, self.args["dbfilename"]))
             except OSError:
                 os.rmdir(os.path.join(self.cwd, self.args["dbfilename"]))
 
-        if remove_nodes_conf and "cluster-config-file" in self.args and os.path.exists(os.path.join(self.cwd, self.args["cluster-config-file"])):
+        if (
+            remove_nodes_conf
+            and "cluster-config-file" in self.args
+            and os.path.exists(os.path.join(self.cwd, self.args["cluster-config-file"]))
+        ):
             try:
                 os.remove(os.path.join(self.cwd, self.args["cluster-config-file"]))
             except OSError:
@@ -135,29 +157,40 @@ class ValkeyServerHandle(object):
         return self.server.pid
 
     def wait_for_shutdown(self):
-        wait_for_ne(lambda: self.server.poll(), None, timeout=TEST_MAX_WAIT_TIME_SECONDS)
+        wait_for_ne(
+            lambda: self.server.poll(), None, timeout=TEST_MAX_WAIT_TIME_SECONDS
+        )
 
     def children_pids(self):
-        process = subprocess.Popen("ps --no-headers -o pid --ppid %s" % self.pid(),
-                             shell=True,
-                             stdout=subprocess.PIPE,)
+        process = subprocess.Popen(
+            "ps --no-headers -o pid --ppid %s" % self.pid(),
+            shell=True,
+            stdout=subprocess.PIPE,
+        )
         children = list()
-        for line in process.communicate()[0].split('\n'):
+        for line in process.communicate()[0].split("\n"):
             line = line.strip()
             if line != "":
                 children.append(line)
         return children
 
     def wait_for_replicas(self, num_of_replicas):
-        wait_for_equal(lambda: self.client.info()["connected_slaves"], num_of_replicas, timeout=MAX_REPLICA_WAIT_TIME)
+        wait_for_equal(
+            lambda: self.client.info()["connected_slaves"],
+            num_of_replicas,
+            timeout=MAX_REPLICA_WAIT_TIME,
+        )
 
     def wait_for_ready_to_accept_connections(self):
-        logfile = os.path.join(self.cwd, self.args['logfile'])
-        strings = ['Ready to accept connections']
-        wait_for_true(lambda: verify_any_of_strings_in_file(strings, logfile), timeout=TEST_MAX_WAIT_TIME_SECONDS)
+        logfile = os.path.join(self.cwd, self.args["logfile"])
+        strings = ["Ready to accept connections"]
+        wait_for_true(
+            lambda: verify_any_of_strings_in_file(strings, logfile),
+            timeout=TEST_MAX_WAIT_TIME_SECONDS,
+        )
 
     def verify_string_in_logfile(self, string):
-        logfile = os.path.join(self.cwd, self.args['logfile'])
+        logfile = os.path.join(self.cwd, self.args["logfile"])
         return verify_string_in_file(string, logfile)
 
     @contextmanager
@@ -172,7 +205,9 @@ class ValkeyServerHandle(object):
             while self.is_alive() and time.time() < start_time + timeout:
                 time.sleep(period)
             if self.is_alive():
-                pytest.fail(f"Valkey server did not crash as expected within {time.time() - start_time} seconds. ")
+                pytest.fail(
+                    f"Valkey server did not crash as expected within {time.time() - start_time} seconds. "
+                )
 
     def start(self, wait_for_ping=True, connect_client=True):
         if self.server:
@@ -180,18 +215,31 @@ class ValkeyServerHandle(object):
         server_args = []
         server_args.extend([self.valkey_path])
         for k, v in list(self.args.items()):
-            server_args.append('--' + k.replace("_", "-"))
+            server_args.append("--" + k.replace("_", "-"))
             args = str(v).split()
             for arg in args:
                 server_args.append(arg)
         logging.info(server_args)
 
         # Provide some warnings to help debug failing tests
-        if "cluster-config-file" in self.args and os.path.exists(os.path.join(self.cwd, self.args["cluster-config-file"])):
-            logging.info(("cluster-config-file exists ({}) before startup for node with port {}".format(os.path.join(os.getcwd(), self.args["cluster-config-file"]), self.port)))
+        if "cluster-config-file" in self.args and os.path.exists(
+            os.path.join(self.cwd, self.args["cluster-config-file"])
+        ):
+            logging.info(
+                (
+                    "cluster-config-file exists ({}) before startup for node with port {}".format(
+                        os.path.join(os.getcwd(), self.args["cluster-config-file"]),
+                        self.port,
+                    )
+                )
+            )
 
-        if "dbfilename" in self.args and os.path.exists(os.path.join(self.cwd, self.args["dbfilename"])):
-            logging.info("dbfilename exists before startup for node with port %d" % self.port)
+        if "dbfilename" in self.args and os.path.exists(
+            os.path.join(self.cwd, self.args["dbfilename"])
+        ):
+            logging.info(
+                "dbfilename exists before startup for node with port %d" % self.port
+            )
 
         self.server = subprocess.Popen(server_args, cwd=self.cwd)
         if connect_client:
@@ -232,14 +280,16 @@ class ValkeyServerHandle(object):
     def wait_for_key(self, key, value):
         if isinstance(value, str):
             value = value.encode()
-        wait_for_equal(lambda: self.client.get(key), value, timeout=TEST_MAX_WAIT_TIME_SECONDS)
+        wait_for_equal(
+            lambda: self.client.get(key), value, timeout=TEST_MAX_WAIT_TIME_SECONDS
+        )
 
     def connect(self):
         c = self.create_from_server(self)
         try:
             self._waitForPing(c)
         except WaitTimeout:
-             raise RuntimeError("Failed to connect or ping server")
+            raise RuntimeError("Failed to connect or ping server")
         self.client = c
 
     def wait_for_save_done(self, client=None):
@@ -247,15 +297,23 @@ class ValkeyServerHandle(object):
         if client is None:
             client = self.client
         try:
-            wait_for_ne(lambda: client.info()['rdb_bgsave_in_progress'], 1, timeout=TEST_MAX_WAIT_TIME_SECONDS)
+            wait_for_ne(
+                lambda: client.info()["rdb_bgsave_in_progress"],
+                1,
+                timeout=TEST_MAX_WAIT_TIME_SECONDS,
+            )
         except WaitTimeout:
             raise RuntimeError("Save failed to complete in time")
-        assert(client.info()['rdb_last_bgsave_status'] == 'ok')
+        assert client.info()["rdb_last_bgsave_status"] == "ok"
 
     def wait_for_save_in_progress(self, client=None):
         if client is None:
             client = self.client
-        wait_for_equal(lambda: client.info()['rdb_bgsave_in_progress'], 1, timeout=TEST_MAX_WAIT_TIME_SECONDS)
+        wait_for_equal(
+            lambda: client.info()["rdb_bgsave_in_progress"],
+            1,
+            timeout=TEST_MAX_WAIT_TIME_SECONDS,
+        )
 
     def is_rdb_done_loading(self):
         rdb_load_log = "Done loading RDB"
@@ -264,9 +322,9 @@ class ValkeyServerHandle(object):
     def num_replicas_online(self, client=None):
         if client is None:
             client = self.client
-        count=0
-        for k,v in client.info().items():
-            if re.match('^slave[0-9]', k) and v['state'] == 'online':
+        count = 0
+        for k, v in client.info().items():
+            if re.match("^slave[0-9]", k) and v["state"] == "online":
                 count += 1
         return count
 
@@ -275,24 +333,27 @@ class ValkeyServerHandle(object):
             return self.client
         return client
 
-    def num_keys(self, db=0, client = None):
+    def num_keys(self, db=0, client=None):
         if client is None:
             client = self.client
-        if f'db{db}'.format(db) in client.info('all').keys():
-            return client.info('all')['db{}'.format(db)]['keys']
+        if f"db{db}".format(db) in client.info("all").keys():
+            return client.info("all")["db{}".format(db)]["keys"]
         return 0
-    
+
     def is_primary_link_up(self, client=None):
         if client is None:
             client = self.client
         """Returns True if role is slave and master_link_status is up"""
-        if client.info()['role'] == 'slave' and client.info()['master_link_status'] == 'up':
+        if (
+            client.info()["role"] == "slave"
+            and client.info()["master_link_status"] == "up"
+        ):
             return True
         return False
 
     def _action_success_flag(self, action, client):
         if action == ValkeyAction.AOF_REWRITE:
-            return client.info()['aof_last_bgrewrite_status'] == 'ok'
+            return client.info()["aof_last_bgrewrite_status"] == "ok"
         else:
             raise RuntimeError("{} not support".format(action))
 
@@ -301,12 +362,17 @@ class ValkeyServerHandle(object):
             client = self.client
         try:
             if action == ValkeyAction.AOF_REWRITE:
-                wait_for_equal(lambda: client.info()['aof_rewrite_in_progress'], 1, timeout=TEST_MAX_WAIT_TIME_SECONDS)
+                wait_for_equal(
+                    lambda: client.info()["aof_rewrite_in_progress"],
+                    1,
+                    timeout=TEST_MAX_WAIT_TIME_SECONDS,
+                )
             else:
                 raise RuntimeError("{} not support".format(action))
         except WaitTimeout:
             raise RuntimeError("{} failed to complete in time".format(action))
-        assert(self._action_success_flag(action, client))
+        assert self._action_success_flag(action, client)
+
 
 class ValkeyTestCaseBase:
     testdir = "test-data"
@@ -316,9 +382,9 @@ class ValkeyTestCaseBase:
 
     @pytest.fixture(autouse=True)
     def port_tracker_fixture(self, resource_port_tracker):
-        '''
+        """
         port_tracker_fixture using resource_port_tracker.
-        '''
+        """
         # Inject port tracker
         logging.info("port tracker")
         self.args = {}
@@ -329,7 +395,9 @@ class ValkeyTestCaseBase:
             try:
                 os.mkdir(self.testdir)
             except:
-                assert(os.path.isdir(self.testdir)) # If tests have conflicted with each other check again
+                assert os.path.isdir(
+                    self.testdir
+                )  # If tests have conflicted with each other check again
 
     def findLogfileLine(self, filename, regex):
         try:
@@ -346,18 +414,22 @@ class ValkeyTestCaseBase:
         return self.findLogfileLine(filename, regex) != None
 
     def wait_for_logfile(self, filename, regex):
-        wait_for_true(lambda: self.doesLogfileContain(filename, regex), timeout=TEST_MAX_WAIT_TIME_SECONDS)
+        wait_for_true(
+            lambda: self.doesLogfileContain(filename, regex),
+            timeout=TEST_MAX_WAIT_TIME_SECONDS,
+        )
 
     def check_all_keys_in_valkey(self, node, dictionary):
-        """ Check that all the keys in Valkey matches that in the dictionary """
+        """Check that all the keys in Valkey matches that in the dictionary"""
         num_keys_in_valkey = 0
         for key in node.client.scan_iter():
             if dictionary.keys():
-                if (isinstance(list(dictionary.keys())[0], str) and
-                    isinstance(key, bytes)):
+                if isinstance(list(dictionary.keys())[0], str) and isinstance(
+                    key, bytes
+                ):
                     key = key.decode()
 
-            assert(node.client.get(key) == str.encode(dictionary[key]))
+            assert node.client.get(key) == str.encode(dictionary[key])
             num_keys_in_valkey += 1
         return num_keys_in_valkey
 
@@ -371,7 +443,7 @@ class ValkeyTestCaseBase:
         wait_seconds = 0
         while wait_seconds < TEST_MAX_WAIT_TIME_SECONDS:
             for client in server.client.client_list():
-                if client['cmd'] == cmd:
+                if client["cmd"] == cmd:
                     return True
             time.sleep(1)
             wait_seconds += 1
@@ -385,8 +457,11 @@ class ValkeyTestCaseBase:
             return self.ip_tracker.get_ip_address()
         return self.DEFAULT_BIND_IP
 
+
 class ValkeyTestCase(ValkeyTestCaseBase):
-    server_path = "valkey-server" # The default server build is assumed that valkey-server is set
+    server_path = (
+        "valkey-server"  # The default server build is assumed that valkey-server is set
+    )
 
     def common_setup(self):
         self.port = self.port_tracker.get_unused_port()
@@ -403,7 +478,9 @@ class ValkeyTestCase(ValkeyTestCaseBase):
         return ValkeyServerHandle
 
     # Expose bind_ip parameter to caller to have more flexible
-    def create_server(self, testdir, bind_ip=None, port=None, server_path=server_path, args=""):
+    def create_server(
+        self, testdir, bind_ip=None, port=None, server_path=server_path, args=""
+    ):
         if not bind_ip:
             bind_ip = self.get_bind_ip()
 
@@ -411,16 +488,22 @@ class ValkeyTestCase(ValkeyTestCaseBase):
             port = self.get_bind_port()
         valkey_server_handle = self.get_valkey_handle()
         self.server_path = server_path
-        valkey_server = valkey_server_handle( bind_ip = bind_ip, port = port,
-            port_tracker = self.port_tracker,
-            cwd = testdir, server_path=server_path)
+        valkey_server = valkey_server_handle(
+            bind_ip=bind_ip,
+            port=port,
+            port_tracker=self.port_tracker,
+            cwd=testdir,
+            server_path=server_path,
+        )
         self.server_list.append(valkey_server)
         valkey_server.args.update(args)
         valkey_cli = valkey_server.start()
         return valkey_server, valkey_cli
 
     def wait_for_all_replicas_online(self, n):
-        wait_for_equal(lambda: self.server.num_replicas_online(), n, timeout=MAX_REPLICA_WAIT_TIME)
+        wait_for_equal(
+            lambda: self.server.num_replicas_online(), n, timeout=MAX_REPLICA_WAIT_TIME
+        )
 
     def wait_for_replicas(self, n):
         self.server.wait_for_replicas(n)
@@ -430,11 +513,21 @@ class ValkeyTestCase(ValkeyTestCaseBase):
             self.server.exit()
             self.server = None
 
+
 class ValkeyReplica(ValkeyServerHandle):
-    def __init__(self, primaryhost, primaryport, bind_ip, port, port_tracker,
-                 testdir, server_path):
-        super(ValkeyReplica, self).__init__(bind_ip, port, port_tracker,
-                                             server_path, testdir)
+    def __init__(
+        self,
+        primaryhost,
+        primaryport,
+        bind_ip,
+        port,
+        port_tracker,
+        testdir,
+        server_path,
+    ):
+        super(ValkeyReplica, self).__init__(
+            bind_ip, port, port_tracker, server_path, testdir
+        )
         self.clients = []
         self.primaryhost = primaryhost
         self.primaryport = primaryport
@@ -444,10 +537,11 @@ class ValkeyReplica(ValkeyServerHandle):
         super(ValkeyReplica, self).exit(remove_rdb, remove_nodes_conf)
         del self.clients[:]
 
+
 class ReplicationTestCase(ValkeyTestCase):
     num_replicas = 1
 
-    def setup_replication(self, num_replicas = num_replicas):
+    def setup_replication(self, num_replicas=num_replicas):
         self.create_replicas(num_replicas)
         self.start_replicas()
         self.wait_for_all_replicas_online(self.num_replicas)
@@ -462,27 +556,41 @@ class ReplicationTestCase(ValkeyTestCase):
         self.destroy_replicas()
 
     def _create_replica(self, primaryhost, primaryport, server_path):
-        return ValkeyReplica(primaryhost, primaryport,
-                            self.get_bind_ip(), self.get_bind_port(),
-                            self.port_tracker, self.testdir, self.server_path)
+        return ValkeyReplica(
+            primaryhost,
+            primaryport,
+            self.get_bind_ip(),
+            self.get_bind_port(),
+            self.port_tracker,
+            self.testdir,
+            self.server_path,
+        )
 
-    def create_replicas(self, num_replicas, primaryhost=None, primaryport=None,
-                        connection_type='tcp', server_path=None):
+    def create_replicas(
+        self,
+        num_replicas,
+        primaryhost=None,
+        primaryport=None,
+        connection_type="tcp",
+        server_path=None,
+    ):
 
         self.destroy_replicas()
 
         default_primaryhost = None
         default_port = None
-        if connection_type == 'tcp':
-            if hasattr(self.server, 'bind_ip'):
+        if connection_type == "tcp":
+            if hasattr(self.server, "bind_ip"):
                 default_primaryhost = self.server.bind_ip
-            if hasattr(self.server, 'port'):
+            if hasattr(self.server, "port"):
                 default_port = self.server.port
-        elif connection_type == 'unix':
+        elif connection_type == "unix":
             default_primaryhost = self.server.args["unixsocket"]
-            default_port = 0    # Valkey treats the hostname as a unix socket path if the port is zero.
+            default_port = 0  # Valkey treats the hostname as a unix socket path if the port is zero.
         else:
-            raise ValueError("Invalid connection type %r, expected 'tcp' or 'unix'" % connection_type)
+            raise ValueError(
+                "Invalid connection type %r, expected 'tcp' or 'unix'" % connection_type
+            )
 
         if not primaryhost:
             primaryhost = default_primaryhost
@@ -513,12 +621,22 @@ class ReplicationTestCase(ValkeyTestCase):
 
     def wait_for_primary_link_up_all_replicas(self):
         for i in range(self.num_replicas):
-            wait_for_true(lambda: self.replicas[i].is_primary_link_up(), timeout=MAX_SYNC_WAIT)
+            wait_for_true(
+                lambda: self.replicas[i].is_primary_link_up(), timeout=MAX_SYNC_WAIT
+            )
 
     def wait_for_value_propagate_to_replicas(self, key, value, db=0):
         for i in range(self.num_replicas):
-            wait_for_equal(lambda: self.replicas[i].clients[db].get(key), value, timout=TEST_MAX_WAIT_TIME_SECONDS)
+            wait_for_equal(
+                lambda: self.replicas[i].clients[db].get(key),
+                value,
+                timout=TEST_MAX_WAIT_TIME_SECONDS,
+            )
 
     def waitForReplicaOffsetToSyncUp(self, primary, replica):
-        pinfo = primary.info()['master_repl_offset']
-        wait_for_equal(lambda: replica.client.info()['slave_repl_offset'], pinfo.get_primary_repl_offset(), timeout=TEST_MAX_WAIT_TIME_SECONDS)
+        pinfo = primary.info()["master_repl_offset"]
+        wait_for_equal(
+            lambda: replica.client.info()["slave_repl_offset"],
+            pinfo.get_primary_repl_offset(),
+            timeout=TEST_MAX_WAIT_TIME_SECONDS,
+        )
