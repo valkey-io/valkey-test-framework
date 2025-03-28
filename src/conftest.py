@@ -3,6 +3,7 @@ This module is loaded for all tests, and attaches a global port tracker to every
 the case where there are parallel parameters.
 """
 
+import sys
 import pytest
 import fcntl
 import socket
@@ -10,23 +11,23 @@ import os
 import tempfile
 from pathlib import Path
 
+
 class PortTracker(object):
-    """ Provides "safe" to bind ports to valkey-server
+    """Provides "safe" to bind ports to valkey-server
 
     Ports allocation is file base is protected. A port that was obtained via
-    `get_unused_port` will not be allocated to any other process. Ports are 
+    `get_unused_port` will not be allocated to any other process. Ports are
     de-allocated (protection removed) upon PortTracker exit, even if the socket
     of the port in question was closed.
     """
 
     CLUSTER_BUS_PORT_OFFSET = 10000
     MIN_PORT = 5000
-    MAX_PORT = 32768 # this is the lower ephemeral port range
+    MAX_PORT = 32768  # this is the lower ephemeral port range
     MAX_BASE_PORT = MAX_PORT - CLUSTER_BUS_PORT_OFFSET - MIN_PORT
     MAX_RETRIES = 100
     LOCKS_DIR = os.path.join(tempfile.gettempdir(), "port_tracker")
 
-    
     def __init__(self, node_id):
         self._hash = hash(str(node_id))
         if not os.path.exists(Path(PortTracker.LOCKS_DIR)):
@@ -64,7 +65,7 @@ class PortTracker(object):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                sock.bind(('0.0.0.0', port))
+                sock.bind(("0.0.0.0", port))
             except OSError:
                 lockfile.close()
                 return False
@@ -87,12 +88,13 @@ class PortTracker(object):
                 self._unlock_port(port)
                 continue
             return port
-        assert False , "Failed to find port after %d tries" % PortTracker.MAX_RETRIES
+        assert False, "Failed to find port after %d tries" % PortTracker.MAX_RETRIES
 
-@pytest.fixture(scope='function', autouse=True)
+
+@pytest.fixture(scope="function", autouse=True)
 def resource_port_tracker(request):
-    '''
+    """
     Create port tracker for each pytest worker.
-    '''
+    """
     with PortTracker(request.node.nodeid) as p:
         yield p

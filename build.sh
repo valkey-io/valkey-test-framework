@@ -56,6 +56,11 @@ else
     exit 1
 fi
 
+echo "Running python formatting check..."
+python3 -m black --check . || (echo "Please run 'black .' to fix formatting issues."; exit 1)
+
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
+
 echo "Running the integration tests..."
 if [ ! -z "${ASAN_BUILD}" ]; then
     # TEST_PATTERN can be used to run specific tests or test patterns.
