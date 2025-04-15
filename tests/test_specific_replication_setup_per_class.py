@@ -17,17 +17,15 @@ class TestExampleReplication(ReplicationTestCase):
         self.server, self.client = self.create_server(
             testdir=self.testdir, server_path=server_path, args=additional_startup_args
         )
+        self.setup_replication(num_replicas=1)
 
     def test_replication1(self):
-        self.setup_replication(num_replicas=1)
         self.replicas[0].client.execute_command("CONFIG SET repl-timeout 5") == b"OK"
         self.client.execute_command("SET K V")
         self.waitForReplicaToSyncUp(self.replicas[0])
         assert self.replicas[0].client.execute_command("GET K") == b"V"
 
     def test_replication2(self):
-        self.setup_replication(num_replicas=1)
-        self.replicas[0].client.execute_command("CONFIG SET repl-timeout 5") == b"OK"
         self.client.execute_command("SET K VV")
         self.waitForReplicaToSyncUp(self.replicas[0])
         assert self.replicas[0].client.execute_command("GET K") == b"VV"
