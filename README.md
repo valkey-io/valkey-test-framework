@@ -3,7 +3,7 @@ Valkey-test-framework is a python framework for creating integration tests using
 
 It allows various functionalities including: Starting up custom Valkey Servers per TestClass or per individual Test, Customizing server startup arguments (e.g. module load, configs), custom server binary path, Replication Testing, Waiter functionality, etc.
 
-It uses pytest for identifying test files (and running the individual test classes containing all the tests). The framework is compatible with pytest verions up till 7.4.3.
+It uses pytest for identifying test files (and running the individual test classes containing all the tests). The framework is compatible with pytest versions up till 7.4.3.
 
 ## Build instructions
 
