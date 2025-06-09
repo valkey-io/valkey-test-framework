@@ -4,7 +4,7 @@ All the wait functions that are defined here,
 wait for a given function to return a value that satisfies the given operator, and
 assert that this happens within a timeout.
 Currently implemented: equal
-Future implemanted: true, not equal, greater than, greater or equal than, less than, less or euqal than
+Future implemanted: true, not equal, greater than, greater or equal than, less than, less or equal than
 All the function get the following parameters:
 args:
 func: The function to call
