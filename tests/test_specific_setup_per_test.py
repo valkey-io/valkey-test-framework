@@ -5,7 +5,7 @@ import sys
 import os
 
 
-class TestExamplePerTestSetup(ValkeyTestCase):
+class TestExampleSpecificSetupPerTest(ValkeyTestCase):
     """
     Every test in this class will have a custom setup that is defined individually.
     """

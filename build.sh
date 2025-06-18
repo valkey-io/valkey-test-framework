@@ -94,10 +94,10 @@ if [ ! -z "${ASAN_BUILD}" ]; then
 else
     # TEST_PATTERN can be used to run specific tests or test patterns.
     if [[ -n "$TEST_PATTERN" ]]; then
-        python3 -m pytest --cache-clear -v "$SCRIPT_DIR/tests/" -k $TEST_PATTERN
+        python3 -m pytest --cache-clear -v "$SCRIPT_DIR/tests/" -k $TEST_PATTERN --order-scope=class
     else
         echo "TEST_PATTERN is not set. Running all integration tests."
-        python3 -m pytest --cache-clear -v "$SCRIPT_DIR/tests/"
+        python3 -m pytest --cache-clear -v "$SCRIPT_DIR/tests/" --order-scope=class
     fi
 fi
 

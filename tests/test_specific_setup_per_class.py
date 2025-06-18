@@ -15,7 +15,7 @@ class ExampleTestCaseBase(ValkeyTestCase):
         )
 
 
-class TestExamplePerClassSetup(ExampleTestCaseBase):
+class TestExampleSpecificSetupPerClass(ExampleTestCaseBase):
     """
     Every test will use the same server startup from the ExampleTestCaseBase.
     """

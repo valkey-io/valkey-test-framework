@@ -176,7 +176,7 @@ class ValkeyServerHandle(object):
 
     def wait_for_replicas(self, num_of_replicas):
         wait_for_equal(
-            lambda: self.client.info()["connected_slaves"],
+            lambda: self.client.info(section="replication")["connected_slaves"],
             num_of_replicas,
             timeout=MAX_REPLICA_WAIT_TIME,
         )
@@ -323,7 +323,7 @@ class ValkeyServerHandle(object):
         if client is None:
             client = self.client
         count = 0
-        for k, v in client.info().items():
+        for k, v in client.info(section="replication").items():
             if re.match("^slave[0-9]", k) and v["state"] == "online":
                 count += 1
         return count
@@ -345,8 +345,8 @@ class ValkeyServerHandle(object):
             client = self.client
         """Returns True if role is slave and master_link_status is up"""
         if (
-            client.info()["role"] == "slave"
-            and client.info()["master_link_status"] == "up"
+            client.info(section="replication")["role"] == "slave"
+            and client.info(section="replication")["master_link_status"] == "up"
         ):
             return True
         return False
@@ -479,7 +479,13 @@ class ValkeyTestCase(ValkeyTestCaseBase):
 
     # Expose bind_ip parameter to caller to have more flexible
     def create_server(
-        self, testdir, bind_ip=None, port=None, server_path=server_path, args=""
+        self,
+        testdir,
+        bind_ip=None,
+        port=None,
+        server_path=server_path,
+        args="",
+        skip_teardown=False,
     ):
         if not bind_ip:
             bind_ip = self.get_bind_ip()
@@ -495,7 +501,8 @@ class ValkeyTestCase(ValkeyTestCaseBase):
             cwd=testdir,
             server_path=server_path,
         )
-        self.server_list.append(valkey_server)
+        if not skip_teardown:
+            self.server_list.append(valkey_server)
         valkey_server.args.update(args)
         valkey_cli = valkey_server.start()
         return valkey_server, valkey_cli
@@ -540,21 +547,33 @@ class ValkeyReplica(ValkeyServerHandle):
 
 
 class ReplicationTestCase(ValkeyTestCase):
-    num_replicas = 1
+    num_replicas = 0
+    skip_teardown = False
+    replicas = []
+    # Primary server
+    server = None
 
-    def setup_replication(self, num_replicas=num_replicas):
+    def setup_replication(
+        self, num_replicas=1, primary_server=None, skip_teardown=False
+    ):
+        self.num_replicas = num_replicas
+        self.replicas = []
+        if primary_server is not None:
+            self.server = primary_server
+        self.skip_teardown = skip_teardown
         self.create_replicas(num_replicas)
         self.start_replicas()
-        self.wait_for_all_replicas_online(self.num_replicas)
         self.wait_for_replicas(self.num_replicas)
         self.wait_for_primary_link_up_all_replicas()
         self.wait_for_all_replicas_online(self.num_replicas)
         for i in range(len(self.replicas)):
             self.waitForReplicaToSyncUp(self.replicas[i])
+        return self.replicas
 
     def teardown(self):
-        ValkeyTestCase.teardown(self)
-        self.destroy_replicas()
+        if not self.skip_teardown:
+            self.destroy_replicas()
+            ValkeyTestCase.teardown(self)
 
     def _create_replica(self, primaryhost, primaryport, server_path):
         return ValkeyReplica(
@@ -575,9 +594,6 @@ class ReplicationTestCase(ValkeyTestCase):
         connection_type="tcp",
         server_path=None,
     ):
-
-        self.destroy_replicas()
-
         default_primaryhost = None
         default_port = None
         if connection_type == "tcp":
@@ -599,8 +615,6 @@ class ReplicationTestCase(ValkeyTestCase):
         if not primaryport:
             primaryport = default_port
 
-        self.num_replicas = num_replicas
-        self.replicas = []
         for _ in range(self.num_replicas):
             replica = self._create_replica(primaryhost, primaryport, server_path)
             replica.set_startup_args(self.args)
@@ -635,9 +649,9 @@ class ReplicationTestCase(ValkeyTestCase):
             )
 
     def waitForReplicaOffsetToSyncUp(self, primary, replica):
-        pinfo = primary.info()["master_repl_offset"]
+        pinfo = primary.info(section="replication")["master_repl_offset"]
         wait_for_equal(
-            lambda: replica.client.info()["slave_repl_offset"],
+            lambda: replica.client.info(section="replication")["slave_repl_offset"],
             pinfo.get_primary_repl_offset(),
             timeout=TEST_MAX_WAIT_TIME_SECONDS,
         )
