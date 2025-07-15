@@ -75,11 +75,12 @@ class ValkeyServerHandle(object):
         self.bind_ip = bind_ip
         self.args = {}
         self.args["port"] = self.port
-        self.args["logfile"] = "logfile_{}".format(port)
-        self.args["dbfilename"] = "testrdb-{}.rdb".format(port)
-        self.args["appenddirname"] = "aof-{}".format(port)
+        self.args["logfile"] = f"logfile_{port}"
+        self.args["dbfilename"] = f"testrdb-{port}.rdb"
+        self.args["appenddirname"] = f"aof-{port}"
         self.cwd = cwd
         self.valkey_path = server_path
+        self.conf_file = None
 
     @classmethod
     def create_from_server(self, server, db=0):
@@ -214,11 +215,18 @@ class ValkeyServerHandle(object):
             raise RuntimeError("Server already started")
         server_args = []
         server_args.extend([self.valkey_path])
+
+        # If configuration file was provided, pass it
+        if self.conf_file:
+            server_args.append(self.conf_file)
+
+        # Append the remaining arguments
         for k, v in list(self.args.items()):
             server_args.append("--" + k.replace("_", "-"))
             args = str(v).split()
             for arg in args:
                 server_args.append(arg)
+
         logging.info(server_args)
 
         # Provide some warnings to help debug failing tests
@@ -486,6 +494,7 @@ class ValkeyTestCase(ValkeyTestCaseBase):
         server_path=server_path,
         args="",
         skip_teardown=False,
+        conf_file=None,
     ):
         if not bind_ip:
             bind_ip = self.get_bind_ip()
@@ -503,6 +512,7 @@ class ValkeyTestCase(ValkeyTestCaseBase):
         )
         if not skip_teardown:
             self.server_list.append(valkey_server)
+        valkey_server.conf_file = conf_file
         valkey_server.args.update(args)
         valkey_cli = valkey_server.start()
         return valkey_server, valkey_cli
