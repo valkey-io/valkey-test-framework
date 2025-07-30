@@ -655,7 +655,7 @@ class ReplicationTestCase(ValkeyTestCase):
             wait_for_equal(
                 lambda: self.replicas[i].clients[db].get(key),
                 value,
-                timout=TEST_MAX_WAIT_TIME_SECONDS,
+                timeout=TEST_MAX_WAIT_TIME_SECONDS,
             )
 
     def waitForReplicaOffsetToSyncUp(self, primary, replica):
