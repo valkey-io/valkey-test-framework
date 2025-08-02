@@ -61,6 +61,41 @@ class ValkeyAction(Enum):
     AOF_REWRITE = 1
 
 
+class ExternalValkeyServerHandle(object):
+    """Handle to an external valkey server"""
+
+    def __init__(self, bind_ip, port):
+        self.bind_ip = bind_ip
+        self.port = port
+        self.client = None
+
+    def connect(self):
+        print(f"ATTEMPTING CONNECTION TO: {self.bind_ip}:{self.port}")
+        self.client = StrictValkey(host=self.bind_ip, port=self.port)
+        try:
+            self.client.ping()
+            print(f"PING SUCCESSFUL TO EXTERNAL SERVER: {self.bind_ip}:{self.port}")
+        except Exception as e:
+            print(f"CONNECTION FAILED TO: {self.bind_ip}:{self.port} - {e}")
+            raise RuntimeError(
+                f"Failed to connect to external server at {self.bind_ip}:{self.port}: {e}"
+            )
+        return self.client
+
+    def get_new_client(self):
+        return StrictValkey(host=self.bind_ip, port=self.port)
+
+    def exit(self, cleanup=True, remove_nodes_conf=True):
+        """No-op for external servers"""
+        pass
+
+    def is_alive(self):
+        try:
+            return self.client.ping()
+        except:
+            return False
+
+
 class ValkeyServerHandle(object):
     """Handle to a valkey server process"""
 
@@ -495,12 +530,29 @@ class ValkeyTestCase(ValkeyTestCaseBase):
         args="",
         skip_teardown=False,
         conf_file=None,
+        external_server=False,
     ):
+
+        if external_server:
+            if not bind_ip:
+                bind_ip = "localhost"
+            if not port:
+                raise ValueError("Port must be specified for external server")
+
+            print(f"CONNECTING TO EXTERNAL SERVER: {bind_ip}:{port}")
+            external_handle = ExternalValkeyServerHandle(bind_ip, port)
+            valkey_cli = external_handle.connect()
+            print(f"CONNECTED TO EXTERNAL SERVER: {bind_ip}:{port}")
+            return external_handle, valkey_cli
+
+        # Original server creation logic
         if not bind_ip:
             bind_ip = self.get_bind_ip()
 
         if not port:
             port = self.get_bind_port()
+
+        print(f"CREATING LOCAL SERVER: {bind_ip}:{port}")
         valkey_server_handle = self.get_valkey_handle()
         self.server_path = server_path
         valkey_server = valkey_server_handle(
@@ -515,6 +567,7 @@ class ValkeyTestCase(ValkeyTestCaseBase):
         valkey_server.conf_file = conf_file
         valkey_server.args.update(args)
         valkey_cli = valkey_server.start()
+        print(f"LOCAL SERVER STARTED: {bind_ip}:{port}")
         return valkey_server, valkey_cli
 
     def wait_for_all_replicas_online(self, n):
