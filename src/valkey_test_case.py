@@ -560,11 +560,10 @@ class ValkeyTestCase(ValkeyTestCaseBase):
             external_handle = ExternalValkeyServerHandle(bind_ip, port)
             valkey_cli = external_handle.connect()
             if not skip_teardown:
-                self.server_list.append(external_handle)  # Ensure cleanup
+                self.server_list.append(external_handle)
             print(f"CONNECTED TO EXTERNAL SERVER: {bind_ip}:{port}")
             return external_handle, valkey_cli
 
-        # Original server creation logic
         if not bind_ip:
             bind_ip = self.get_bind_ip()
 
