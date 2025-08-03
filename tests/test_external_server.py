@@ -3,6 +3,10 @@ from valkey_test_case import ValkeyTestCase
 
 
 class TestExternalServer(ValkeyTestCase):
+    """
+    Test suite for connecting to external Valkey servers
+    """
+
     def test_connect_to_external_server(self):
         """Example: Connect to external Valkey server running on localhost:6379"""
         try:
@@ -21,4 +25,5 @@ class TestExternalServer(ValkeyTestCase):
         except RuntimeError as e:
             # Skip test if external server not available
             import pytest
+
             pytest.skip(f"External server not available: {e}")

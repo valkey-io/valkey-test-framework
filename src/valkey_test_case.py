@@ -68,6 +68,7 @@ class ExternalValkeyServerHandle(object):
         self.bind_ip = bind_ip
         self.port = port
         self.client = None
+        self.clients = []  # Track all clients for cleanup
 
     def connect(self):
         print(f"ATTEMPTING CONNECTION TO: {self.bind_ip}:{self.port}")
@@ -83,11 +84,27 @@ class ExternalValkeyServerHandle(object):
         return self.client
 
     def get_new_client(self):
-        return StrictValkey(host=self.bind_ip, port=self.port)
+        client = StrictValkey(host=self.bind_ip, port=self.port)
+        self.clients.append(client)  # Track for cleanup
+        return client
 
     def exit(self, cleanup=True, remove_nodes_conf=True):
-        """No-op for external servers"""
-        pass
+        """Close all connections to external server"""
+        # Close main client
+        if self.client:
+            try:
+                self.client.close()
+            except:
+                pass
+            self.client = None
+
+        # Close all tracked clients
+        for client in self.clients:
+            try:
+                client.close()
+            except:
+                pass
+        self.clients.clear()
 
     def is_alive(self):
         try:
@@ -542,6 +559,8 @@ class ValkeyTestCase(ValkeyTestCaseBase):
             print(f"CONNECTING TO EXTERNAL SERVER: {bind_ip}:{port}")
             external_handle = ExternalValkeyServerHandle(bind_ip, port)
             valkey_cli = external_handle.connect()
+            if not skip_teardown:
+                self.server_list.append(external_handle)  # Ensure cleanup
             print(f"CONNECTED TO EXTERNAL SERVER: {bind_ip}:{port}")
             return external_handle, valkey_cli
 
@@ -708,7 +727,7 @@ class ReplicationTestCase(ValkeyTestCase):
             wait_for_equal(
                 lambda: self.replicas[i].clients[db].get(key),
                 value,
-                timout=TEST_MAX_WAIT_TIME_SECONDS,
+                timeout=TEST_MAX_WAIT_TIME_SECONDS,
             )
 
     def waitForReplicaOffsetToSyncUp(self, primary, replica):
