@@ -85,12 +85,10 @@ class ExternalValkeyServerHandle(object):
 
     def get_new_client(self):
         client = StrictValkey(host=self.bind_ip, port=self.port)
-        self.clients.append(client)  # Track for cleanup
+        self.clients.append(client) 
         return client
 
     def exit(self, cleanup=True, remove_nodes_conf=True):
-        """Close all connections to external server"""
-        # Close main client
         if self.client:
             try:
                 self.client.close()
@@ -98,7 +96,6 @@ class ExternalValkeyServerHandle(object):
                 pass
             self.client = None
 
-        # Close all tracked clients
         for client in self.clients:
             try:
                 client.close()
@@ -111,6 +108,89 @@ class ExternalValkeyServerHandle(object):
             return self.client.ping()
         except:
             return False
+        
+    def wait_for_save_done(self, client=None):
+        """Wait for the save to complete on external server"""
+        if client is None:
+            client = self.client
+
+        try:
+            wait_for_ne(
+                lambda: client.info()["rdb_bgsave_in_progress"],
+                1,
+                timeout=TEST_MAX_WAIT_TIME_SECONDS,
+            )
+        except:
+            raise RuntimeError("Save failed to complete in time")
+        assert client.info()["rdb_last_bgsave_status"] == "ok"
+
+    def restart(self, remove_rdb=False, remove_nodes_conf=False, connect_client=True):
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--format", "{{.Names}}", "--filter", f"publish={self.port}"],
+                capture_output=True, text=True, check=True
+            )
+            container_names = result.stdout.strip().split('\n')
+            if container_names and container_names[0]:
+                container_name = container_names[0]
+                subprocess.run(["docker", "restart", container_name], check=True)
+                time.sleep(3) 
+        except:
+            pass
+        
+        if connect_client:
+            self.connect()
+
+    def num_keys(self, db=0, client=None):
+        if client is None:
+            client = self.client
+        if f"db{db}" in client.info("all").keys():
+            return client.info("all")[f"db{db}"]["keys"]
+        return 0
+
+    def is_rdb_done_loading(self):
+        """Check if RDB loading is done by examining container logs"""
+        try:
+            # Find container using this port
+            result = subprocess.run(
+                ["docker", "ps", "--format", "{{.Names}}", "--filter", f"publish={self.port}"],
+                capture_output=True, text=True, check=True
+            )
+            container_names = result.stdout.strip().split('\n')
+            if container_names and container_names[0]:
+                container_name = container_names[0]
+                # Check container logs for RDB loading completion
+                logs = subprocess.run(
+                    ["docker", "logs", container_name],
+                    capture_output=True, text=True, check=True
+                )
+                return "Done loading RDB" in logs.stdout or "Done loading RDB" in logs.stderr
+        except:
+            pass
+        return True  # Fallback to assume loaded
+
+    def _action_success_flag(self, action, client):
+        if action == ValkeyAction.AOF_REWRITE:
+            return client.info()["aof_last_bgrewrite_status"] == "ok"
+        else:
+            raise RuntimeError(f"{action} not supported")
+
+    def wait_for_action_done(self, action, client=None):
+        """Wait for action to complete on external server"""
+        if client is None:
+            client = self.client
+        try:
+            if action == ValkeyAction.AOF_REWRITE:
+                wait_for_equal(
+                    lambda: client.info()["aof_rewrite_in_progress"],
+                    1,
+                    timeout=TEST_MAX_WAIT_TIME_SECONDS,
+                )
+            else:
+                raise RuntimeError(f"{action} not supported")
+        except WaitTimeout:
+            raise RuntimeError(f"{action} failed to complete in time")
+        assert self._action_success_flag(action, client)
 
 
 class ValkeyServerHandle(object):
