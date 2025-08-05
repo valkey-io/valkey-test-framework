@@ -375,6 +375,7 @@ class ValkeyServerHandle(object):
             self.client = c
 
     def wait_for_save_done(self, client=None):
+        """Wait for the save to complete, failing if it does not complete successfully in the timeout"""
         if client is None:
             client = self.client
         try:
