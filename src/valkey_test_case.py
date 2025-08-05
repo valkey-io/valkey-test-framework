@@ -61,7 +61,61 @@ class ValkeyAction(Enum):
     AOF_REWRITE = 1
 
 
-class ExternalValkeyServerHandle(object):
+class BaseValkeyHandle(object):
+    """Base class with common methods for both local and external servers"""
+
+    def num_keys(self, db=0, client=None):
+        if client is None:
+            client = self.client
+        if f"db{db}" in client.info("all").keys():
+            return client.info("all")[f"db{db}"]["keys"]
+        return 0
+
+    def _action_success_flag(self, action, client):
+        if action == ValkeyAction.AOF_REWRITE:
+            return client.info()["aof_last_bgrewrite_status"] == "ok"
+        else:
+            raise RuntimeError(f"{action} not supported")
+
+    def wait_for_action_done(self, action, client=None):
+        if client is None:
+            client = self.client
+        try:
+            if action == ValkeyAction.AOF_REWRITE:
+                wait_for_equal(
+                    lambda: client.info()["aof_rewrite_in_progress"],
+                    1,
+                    timeout=TEST_MAX_WAIT_TIME_SECONDS,
+                )
+            else:
+                raise RuntimeError("{} not support".format(action))
+        except WaitTimeout:
+            raise RuntimeError("{} failed to complete in time".format(action))
+        assert self._action_success_flag(action, client)
+
+    def wait_for_save_done(self, client=None):
+        """Wait for the save to complete, failing if it does not complete successfully in the timeout"""
+        if client is None:
+            client = self.client
+        try:
+            wait_for_ne(
+                lambda: client.info()["rdb_bgsave_in_progress"],
+                1,
+                timeout=TEST_MAX_WAIT_TIME_SECONDS,
+            )
+        except WaitTimeout:
+            raise RuntimeError("Save failed to complete in time")
+        assert client.info()["rdb_last_bgsave_status"] == "ok"
+    
+    def is_alive(self):
+        try:
+            self.client.ping()
+            return True
+        except:
+            return False
+
+
+class ExternalValkeyServerHandle(BaseValkeyHandle):
     """Handle to an external valkey server"""
 
     def __init__(self, bind_ip, port):
@@ -103,27 +157,6 @@ class ExternalValkeyServerHandle(object):
                 pass
         self.clients.clear()
 
-    def is_alive(self):
-        try:
-            return self.client.ping()
-        except:
-            return False
-
-    def wait_for_save_done(self, client=None):
-        """Wait for the save to complete on external server"""
-        if client is None:
-            client = self.client
-
-        try:
-            wait_for_ne(
-                lambda: client.info()["rdb_bgsave_in_progress"],
-                1,
-                timeout=TEST_MAX_WAIT_TIME_SECONDS,
-            )
-        except:
-            raise RuntimeError("Save failed to complete in time")
-        assert client.info()["rdb_last_bgsave_status"] == "ok"
-
     def restart(self, remove_rdb=False, remove_nodes_conf=False, connect_client=True):
         try:
             result = subprocess.run(
@@ -149,13 +182,6 @@ class ExternalValkeyServerHandle(object):
 
         if connect_client:
             self.connect()
-
-    def num_keys(self, db=0, client=None):
-        if client is None:
-            client = self.client
-        if f"db{db}" in client.info("all").keys():
-            return client.info("all")[f"db{db}"]["keys"]
-        return 0
 
     def is_rdb_done_loading(self):
         """Check if RDB loading is done by examining container logs"""
@@ -192,31 +218,8 @@ class ExternalValkeyServerHandle(object):
             pass
         return True  # Fallback to assume loaded
 
-    def _action_success_flag(self, action, client):
-        if action == ValkeyAction.AOF_REWRITE:
-            return client.info()["aof_last_bgrewrite_status"] == "ok"
-        else:
-            raise RuntimeError(f"{action} not supported")
 
-    def wait_for_action_done(self, action, client=None):
-        """Wait for action to complete on external server"""
-        if client is None:
-            client = self.client
-        try:
-            if action == ValkeyAction.AOF_REWRITE:
-                wait_for_equal(
-                    lambda: client.info()["aof_rewrite_in_progress"],
-                    1,
-                    timeout=TEST_MAX_WAIT_TIME_SECONDS,
-                )
-            else:
-                raise RuntimeError(f"{action} not supported")
-        except WaitTimeout:
-            raise RuntimeError(f"{action} failed to complete in time")
-        assert self._action_success_flag(action, client)
-
-
-class ValkeyServerHandle(object):
+class ValkeyServerHandle(BaseValkeyHandle):
     """Handle to a valkey server process"""
 
     DEFAULT_BIND_IP = "0.0.0.0"
@@ -425,13 +428,6 @@ class ValkeyServerHandle(object):
         self.exit(remove_rdb, remove_nodes_conf)
         self.start(connect_client=connect_client)
 
-    def is_alive(self):
-        try:
-            self.client.ping()
-            return True
-        except:
-            return False
-
     def _waitForPing(self, c):
         try:
             wait_for_true(lambda: c.ping(), timeout=MAX_PING_WAIT_TIME)
@@ -454,20 +450,6 @@ class ValkeyServerHandle(object):
         except WaitTimeout:
             raise RuntimeError("Failed to connect or ping server")
         self.client = c
-
-    def wait_for_save_done(self, client=None):
-        """Wait for the save to complete, failing if it does not complete successfully in the timeout"""
-        if client is None:
-            client = self.client
-        try:
-            wait_for_ne(
-                lambda: client.info()["rdb_bgsave_in_progress"],
-                1,
-                timeout=TEST_MAX_WAIT_TIME_SECONDS,
-            )
-        except WaitTimeout:
-            raise RuntimeError("Save failed to complete in time")
-        assert client.info()["rdb_last_bgsave_status"] == "ok"
 
     def wait_for_save_in_progress(self, client=None):
         if client is None:
@@ -496,13 +478,6 @@ class ValkeyServerHandle(object):
             return self.client
         return client
 
-    def num_keys(self, db=0, client=None):
-        if client is None:
-            client = self.client
-        if f"db{db}".format(db) in client.info("all").keys():
-            return client.info("all")["db{}".format(db)]["keys"]
-        return 0
-
     def is_primary_link_up(self, client=None):
         if client is None:
             client = self.client
@@ -513,28 +488,6 @@ class ValkeyServerHandle(object):
         ):
             return True
         return False
-
-    def _action_success_flag(self, action, client):
-        if action == ValkeyAction.AOF_REWRITE:
-            return client.info()["aof_last_bgrewrite_status"] == "ok"
-        else:
-            raise RuntimeError("{} not support".format(action))
-
-    def wait_for_action_done(self, action, client=None):
-        if client is None:
-            client = self.client
-        try:
-            if action == ValkeyAction.AOF_REWRITE:
-                wait_for_equal(
-                    lambda: client.info()["aof_rewrite_in_progress"],
-                    1,
-                    timeout=TEST_MAX_WAIT_TIME_SECONDS,
-                )
-            else:
-                raise RuntimeError("{} not support".format(action))
-        except WaitTimeout:
-            raise RuntimeError("{} failed to complete in time".format(action))
-        assert self._action_success_flag(action, client)
 
 
 class ValkeyTestCaseBase:
