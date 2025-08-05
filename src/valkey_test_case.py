@@ -85,7 +85,7 @@ class ExternalValkeyServerHandle(object):
 
     def get_new_client(self):
         client = StrictValkey(host=self.bind_ip, port=self.port)
-        self.clients.append(client) 
+        self.clients.append(client)
         return client
 
     def exit(self, cleanup=True, remove_nodes_conf=True):
@@ -108,7 +108,7 @@ class ExternalValkeyServerHandle(object):
             return self.client.ping()
         except:
             return False
-        
+
     def wait_for_save_done(self, client=None):
         """Wait for the save to complete on external server"""
         if client is None:
@@ -127,17 +127,26 @@ class ExternalValkeyServerHandle(object):
     def restart(self, remove_rdb=False, remove_nodes_conf=False, connect_client=True):
         try:
             result = subprocess.run(
-                ["docker", "ps", "--format", "{{.Names}}", "--filter", f"publish={self.port}"],
-                capture_output=True, text=True, check=True
+                [
+                    "docker",
+                    "ps",
+                    "--format",
+                    "{{.Names}}",
+                    "--filter",
+                    f"publish={self.port}",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
             )
-            container_names = result.stdout.strip().split('\n')
+            container_names = result.stdout.strip().split("\n")
             if container_names and container_names[0]:
                 container_name = container_names[0]
                 subprocess.run(["docker", "restart", container_name], check=True)
-                time.sleep(3) 
+                time.sleep(3)
         except:
             pass
-        
+
         if connect_client:
             self.connect()
 
@@ -153,18 +162,32 @@ class ExternalValkeyServerHandle(object):
         try:
             # Find container using this port
             result = subprocess.run(
-                ["docker", "ps", "--format", "{{.Names}}", "--filter", f"publish={self.port}"],
-                capture_output=True, text=True, check=True
+                [
+                    "docker",
+                    "ps",
+                    "--format",
+                    "{{.Names}}",
+                    "--filter",
+                    f"publish={self.port}",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
             )
-            container_names = result.stdout.strip().split('\n')
+            container_names = result.stdout.strip().split("\n")
             if container_names and container_names[0]:
                 container_name = container_names[0]
                 # Check container logs for RDB loading completion
                 logs = subprocess.run(
                     ["docker", "logs", container_name],
-                    capture_output=True, text=True, check=True
+                    capture_output=True,
+                    text=True,
+                    check=True,
                 )
-                return "Done loading RDB" in logs.stdout or "Done loading RDB" in logs.stderr
+                return (
+                    "Done loading RDB" in logs.stdout
+                    or "Done loading RDB" in logs.stderr
+                )
         except:
             pass
         return True  # Fallback to assume loaded
