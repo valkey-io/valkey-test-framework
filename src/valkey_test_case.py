@@ -61,184 +61,39 @@ class ValkeyAction(Enum):
     AOF_REWRITE = 1
 
 
-class BaseValkeyHandle(object):
-    """Base class with common methods for both local and external servers"""
-
-    def num_keys(self, db=0, client=None):
-        if client is None:
-            client = self.client
-        if f"db{db}" in client.info("all").keys():
-            return client.info("all")[f"db{db}"]["keys"]
-        return 0
-
-    def _action_success_flag(self, action, client):
-        if action == ValkeyAction.AOF_REWRITE:
-            return client.info()["aof_last_bgrewrite_status"] == "ok"
-        else:
-            raise RuntimeError(f"{action} not supported")
-
-    def wait_for_action_done(self, action, client=None):
-        if client is None:
-            client = self.client
-        try:
-            if action == ValkeyAction.AOF_REWRITE:
-                wait_for_equal(
-                    lambda: client.info()["aof_rewrite_in_progress"],
-                    1,
-                    timeout=TEST_MAX_WAIT_TIME_SECONDS,
-                )
-            else:
-                raise RuntimeError("{} not support".format(action))
-        except WaitTimeout:
-            raise RuntimeError("{} failed to complete in time".format(action))
-        assert self._action_success_flag(action, client)
-
-    def wait_for_save_done(self, client=None):
-        """Wait for the save to complete, failing if it does not complete successfully in the timeout"""
-        if client is None:
-            client = self.client
-        try:
-            wait_for_ne(
-                lambda: client.info()["rdb_bgsave_in_progress"],
-                1,
-                timeout=TEST_MAX_WAIT_TIME_SECONDS,
-            )
-        except WaitTimeout:
-            raise RuntimeError("Save failed to complete in time")
-        assert client.info()["rdb_last_bgsave_status"] == "ok"
-    
-    def is_alive(self):
-        try:
-            self.client.ping()
-            return True
-        except:
-            return False
-
-
-class ExternalValkeyServerHandle(BaseValkeyHandle):
-    """Handle to an external valkey server"""
-
-    def __init__(self, bind_ip, port):
-        self.bind_ip = bind_ip
-        self.port = port
-        self.client = None
-        self.clients = []  # Track all clients for cleanup
-
-    def connect(self):
-        print(f"ATTEMPTING CONNECTION TO: {self.bind_ip}:{self.port}")
-        self.client = StrictValkey(host=self.bind_ip, port=self.port)
-        try:
-            self.client.ping()
-            print(f"PING SUCCESSFUL TO EXTERNAL SERVER: {self.bind_ip}:{self.port}")
-        except Exception as e:
-            print(f"CONNECTION FAILED TO: {self.bind_ip}:{self.port} - {e}")
-            raise RuntimeError(
-                f"Failed to connect to external server at {self.bind_ip}:{self.port}: {e}"
-            )
-        return self.client
-
-    def get_new_client(self):
-        client = StrictValkey(host=self.bind_ip, port=self.port)
-        self.clients.append(client)
-        return client
-
-    def exit(self, cleanup=True, remove_nodes_conf=True):
-        if self.client:
-            try:
-                self.client.close()
-            except:
-                pass
-            self.client = None
-
-        for client in self.clients:
-            try:
-                client.close()
-            except:
-                pass
-        self.clients.clear()
-
-    def restart(self, remove_rdb=False, remove_nodes_conf=False, connect_client=True):
-        try:
-            result = subprocess.run(
-                [
-                    "docker",
-                    "ps",
-                    "--format",
-                    "{{.Names}}",
-                    "--filter",
-                    f"publish={self.port}",
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            container_names = result.stdout.strip().split("\n")
-            if container_names and container_names[0]:
-                container_name = container_names[0]
-                subprocess.run(["docker", "restart", container_name], check=True)
-                time.sleep(3)
-        except:
-            pass
-
-        if connect_client:
-            self.connect()
-
-    def is_rdb_done_loading(self):
-        """Check if RDB loading is done by examining container logs"""
-        try:
-            # Find container using this port
-            result = subprocess.run(
-                [
-                    "docker",
-                    "ps",
-                    "--format",
-                    "{{.Names}}",
-                    "--filter",
-                    f"publish={self.port}",
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            container_names = result.stdout.strip().split("\n")
-            if container_names and container_names[0]:
-                container_name = container_names[0]
-                # Check container logs for RDB loading completion
-                logs = subprocess.run(
-                    ["docker", "logs", container_name],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                return (
-                    "Done loading RDB" in logs.stdout
-                    or "Done loading RDB" in logs.stderr
-                )
-        except:
-            pass
-        return True  # Fallback to assume loaded
-
-
-class ValkeyServerHandle(BaseValkeyHandle):
+class ValkeyServerHandle(object):
     """Handle to a valkey server process"""
 
     DEFAULT_BIND_IP = "0.0.0.0"
 
     def __init__(
-        self, bind_ip, port, port_tracker, server_path="valkey-server", cwd="."
+        self,
+        bind_ip,
+        port,
+        port_tracker,
+        server_path="valkey-server",
+        cwd=".",
+        external_mode=False,
     ):
-        self.server = None
+        self.external_mode = external_mode
         self.client = None
         self.port = port
         self.bind_ip = bind_ip
-        self.args = {}
-        self.args["port"] = self.port
-        self.args["logfile"] = f"logfile_{port}"
-        self.args["dbfilename"] = f"testrdb-{port}.rdb"
-        self.args["appenddirname"] = f"aof-{port}"
-        self.cwd = cwd
-        self.valkey_path = server_path
-        self.conf_file = None
+
+        if external_mode:
+            # External server setup
+            self.clients = []
+        else:
+            # Local server setup
+            self.server = None
+            self.args = {}
+            self.args["port"] = self.port
+            self.args["logfile"] = f"logfile_{port}"
+            self.args["dbfilename"] = f"testrdb-{port}.rdb"
+            self.args["appenddirname"] = f"aof-{port}"
+            self.cwd = cwd
+            self.valkey_path = server_path
+            self.conf_file = None
 
     @classmethod
     def create_from_server(self, server, db=0):
@@ -250,9 +105,32 @@ class ValkeyServerHandle(BaseValkeyHandle):
         self.args.update(args)
 
     def get_new_client(self):
-        return self.create_from_server(self)
+        if self.external_mode:
+            client = StrictValkey(host=self.bind_ip, port=self.port)
+            self.clients.append(client)
+            return client
+        else:
+            return self.create_from_server(self)
 
     def exit(self, cleanup=True, remove_nodes_conf=True):
+        if self.external_mode:
+            # External server cleanup
+            if self.client:
+                try:
+                    self.client.close()
+                except:
+                    pass
+                self.client = None
+
+            for client in self.clients:
+                try:
+                    client.close()
+                except:
+                    pass
+            self.clients.clear()
+            return
+
+        # Local server cleanup
         if self.client:
             try:
                 self.client.shutdown("nosave")
@@ -425,8 +303,43 @@ class ValkeyServerHandle(BaseValkeyHandle):
         return self.client
 
     def restart(self, remove_rdb=True, remove_nodes_conf=True, connect_client=True):
-        self.exit(remove_rdb, remove_nodes_conf)
-        self.start(connect_client=connect_client)
+        if self.external_mode:
+            # Docker restart logic
+            try:
+                result = subprocess.run(
+                    [
+                        "docker",
+                        "ps",
+                        "--format",
+                        "{{.Names}}",
+                        "--filter",
+                        f"publish={self.port}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                container_names = result.stdout.strip().split("\n")
+                if container_names and container_names[0]:
+                    container_name = container_names[0]
+                    subprocess.run(["docker", "restart", container_name], check=True)
+                    time.sleep(3)
+            except:
+                pass
+
+            if connect_client:
+                self.connect()
+        else:
+            # Local server restart logic
+            self.exit(remove_rdb, remove_nodes_conf)
+            self.start(connect_client=connect_client)
+
+    def is_alive(self):
+        try:
+            self.client.ping()
+            return True
+        except:
+            return False
 
     def _waitForPing(self, c):
         try:
@@ -444,12 +357,35 @@ class ValkeyServerHandle(BaseValkeyHandle):
         )
 
     def connect(self):
-        c = self.create_from_server(self)
+        if self.external_mode:
+            self.client = StrictValkey(host=self.bind_ip, port=self.port)
+            try:
+                self.client.ping()
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to connect to external server at {self.bind_ip}:{self.port}: {e}"
+                )
+            return self.client
+        else:
+            c = self.create_from_server(self)
+            try:
+                self._waitForPing(c)
+            except WaitTimeout:
+                raise RuntimeError("Failed to connect or ping server")
+            self.client = c
+
+    def wait_for_save_done(self, client=None):
+        if client is None:
+            client = self.client
         try:
-            self._waitForPing(c)
+            wait_for_ne(
+                lambda: client.info()["rdb_bgsave_in_progress"],
+                1,
+                timeout=TEST_MAX_WAIT_TIME_SECONDS,
+            )
         except WaitTimeout:
-            raise RuntimeError("Failed to connect or ping server")
-        self.client = c
+            raise RuntimeError("Save failed to complete in time")
+        assert client.info()["rdb_last_bgsave_status"] == "ok"
 
     def wait_for_save_in_progress(self, client=None):
         if client is None:
@@ -461,8 +397,44 @@ class ValkeyServerHandle(BaseValkeyHandle):
         )
 
     def is_rdb_done_loading(self):
-        rdb_load_log = "Done loading RDB"
-        return self.verify_string_in_logfile(rdb_load_log) == True
+        if self.external_mode:
+            # Check if RDB loading is done by examining container logs
+            try:
+                # Find container using this port
+                result = subprocess.run(
+                    [
+                        "docker",
+                        "ps",
+                        "--format",
+                        "{{.Names}}",
+                        "--filter",
+                        f"publish={self.port}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                container_names = result.stdout.strip().split("\n")
+                if container_names and container_names[0]:
+                    container_name = container_names[0]
+                    # Check container logs for RDB loading completion
+                    logs = subprocess.run(
+                        ["docker", "logs", container_name],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    return (
+                        "Done loading RDB" in logs.stdout
+                        or "Done loading RDB" in logs.stderr
+                    )
+            except:
+                pass
+            return True  # Fallback to assume loaded
+        else:
+            # Local server logic
+            rdb_load_log = "Done loading RDB"
+            return self.verify_string_in_logfile(rdb_load_log) == True
 
     def num_replicas_online(self, client=None):
         if client is None:
@@ -478,6 +450,13 @@ class ValkeyServerHandle(BaseValkeyHandle):
             return self.client
         return client
 
+    def num_keys(self, db=0, client=None):
+        if client is None:
+            client = self.client
+        if f"db{db}".format(db) in client.info("all").keys():
+            return client.info("all")["db{}".format(db)]["keys"]
+        return 0
+
     def is_primary_link_up(self, client=None):
         if client is None:
             client = self.client
@@ -488,6 +467,28 @@ class ValkeyServerHandle(BaseValkeyHandle):
         ):
             return True
         return False
+
+    def _action_success_flag(self, action, client):
+        if action == ValkeyAction.AOF_REWRITE:
+            return client.info()["aof_last_bgrewrite_status"] == "ok"
+        else:
+            raise RuntimeError("{} not support".format(action))
+
+    def wait_for_action_done(self, action, client=None):
+        if client is None:
+            client = self.client
+        try:
+            if action == ValkeyAction.AOF_REWRITE:
+                wait_for_equal(
+                    lambda: client.info()["aof_rewrite_in_progress"],
+                    1,
+                    timeout=TEST_MAX_WAIT_TIME_SECONDS,
+                )
+            else:
+                raise RuntimeError("{} not support".format(action))
+        except WaitTimeout:
+            raise RuntimeError("{} failed to complete in time".format(action))
+        assert self._action_success_flag(action, client)
 
 
 class ValkeyTestCaseBase:
@@ -612,13 +613,13 @@ class ValkeyTestCase(ValkeyTestCaseBase):
             if not port:
                 raise ValueError("Port must be specified for external server")
 
-            print(f"CONNECTING TO EXTERNAL SERVER: {bind_ip}:{port}")
-            external_handle = ExternalValkeyServerHandle(bind_ip, port)
-            valkey_cli = external_handle.connect()
+            valkey_server = ValkeyServerHandle(
+                bind_ip, port, port_tracker=None, external_mode=True
+            )
+            valkey_cli = valkey_server.connect()
             if not skip_teardown:
-                self.server_list.append(external_handle)
-            print(f"CONNECTED TO EXTERNAL SERVER: {bind_ip}:{port}")
-            return external_handle, valkey_cli
+                self.server_list.append(valkey_server)
+            return valkey_server, valkey_cli
 
         if not bind_ip:
             bind_ip = self.get_bind_ip()
@@ -626,7 +627,6 @@ class ValkeyTestCase(ValkeyTestCaseBase):
         if not port:
             port = self.get_bind_port()
 
-        print(f"CREATING LOCAL SERVER: {bind_ip}:{port}")
         valkey_server_handle = self.get_valkey_handle()
         self.server_path = server_path
         valkey_server = valkey_server_handle(
@@ -641,7 +641,6 @@ class ValkeyTestCase(ValkeyTestCaseBase):
         valkey_server.conf_file = conf_file
         valkey_server.args.update(args)
         valkey_cli = valkey_server.start()
-        print(f"LOCAL SERVER STARTED: {bind_ip}:{port}")
         return valkey_server, valkey_cli
 
     def wait_for_all_replicas_online(self, n):
