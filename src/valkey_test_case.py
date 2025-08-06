@@ -378,7 +378,7 @@ class ValkeyServerHandle(object):
     def is_rdb_done_loading(self):
         if self.external_mode:
             info = self.client.info()
-            return info.get('loading', 0) == 0
+            return info.get("loading", 0) == 0
         else:
             # Local server logic
             rdb_load_log = "Done loading RDB"
