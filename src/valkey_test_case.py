@@ -348,12 +348,7 @@ class ValkeyServerHandle(object):
         try:
             self.client.ping()
         except Exception as e:
-            if self.external_mode:
-                raise RuntimeError(
-                    f"Failed to connect to external server at {self.bind_ip}:{self.port}: {e}"
-                )
-            else:
-                raise RuntimeError(f"Failed to connect or ping server: {e}")
+            raise RuntimeError("Failed to connect or ping server")
         return self.client
 
     def wait_for_save_done(self, client=None):
