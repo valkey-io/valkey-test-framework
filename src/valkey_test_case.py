@@ -95,49 +95,37 @@ class ValkeyServerHandle(object):
             self.valkey_path = server_path
             self.conf_file = None
 
-    @classmethod
-    def create_from_server(self, server, db=0):
-        logging.info(("Created regular client for port {}".format(server.port)))
-        r = StrictValkey(host="localhost", port=server.port, db=db)
+    def create_from_server(self, db=0):
+        logging.info(("Created regular client for port {}".format(self.port)))
+        r = StrictValkey(host=self.bind_ip, port=self.port, db=db)
         return r
 
     def set_startup_args(self, args):
         self.args.update(args)
 
     def get_new_client(self):
+        client = self.create_from_server()
         if self.external_mode:
-            client = StrictValkey(host=self.bind_ip, port=self.port)
             self.clients.append(client)
-            return client
-        else:
-            return self.create_from_server(self)
+        return client
 
     def exit(self, cleanup=True, remove_nodes_conf=True):
-        if self.external_mode:
-            # External server cleanup
-            if self.client:
+        # Client cleanup (same for both modes)
+        if self.client:
+            if not self.external_mode:
                 try:
-                    self.client.close()
+                    self.client.shutdown("nosave")
                 except:
-                    pass
-                self.client = None
+                    logging.warning("SHUTDOWN was unsuccessful")
+            self.client.close()
+            self.client = None
 
+        # External mode: clean up additional clients
+        if self.external_mode:
             for client in self.clients:
-                try:
-                    client.close()
-                except:
-                    pass
+                client.close()
             self.clients.clear()
             return
-
-        # Local server cleanup
-        if self.client:
-            try:
-                self.client.shutdown("nosave")
-            except:
-                logging.warning("SHUTDOWN was unsuccessful")
-
-            self.client = None
 
         if self.server:
             self._waitForExit()
@@ -305,27 +293,26 @@ class ValkeyServerHandle(object):
     def restart(self, remove_rdb=True, remove_nodes_conf=True, connect_client=True):
         if self.external_mode:
             # Docker restart logic
-            try:
-                result = subprocess.run(
-                    [
-                        "docker",
-                        "ps",
-                        "--format",
-                        "{{.Names}}",
-                        "--filter",
-                        f"publish={self.port}",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                container_names = result.stdout.strip().split("\n")
-                if container_names and container_names[0]:
-                    container_name = container_names[0]
-                    subprocess.run(["docker", "restart", container_name], check=True)
-                    time.sleep(3)
-            except:
-                pass
+            result = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "--format",
+                    "{{.Names}}",
+                    "--filter",
+                    f"publish={self.port}",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            container_names = result.stdout.strip().split("\n")
+            if container_names and container_names[0]:
+                container_name = container_names[0]
+                subprocess.run(["docker", "restart", container_name], check=True)
+                time.sleep(3)
+            else:
+                raise RuntimeError(f"No Docker container found using port {self.port}")
 
             if connect_client:
                 self.connect()
@@ -357,22 +344,17 @@ class ValkeyServerHandle(object):
         )
 
     def connect(self):
-        if self.external_mode:
-            self.client = StrictValkey(host=self.bind_ip, port=self.port)
-            try:
-                self.client.ping()
-            except Exception as e:
+        self.client = self.create_from_server()
+        try:
+            self.client.ping()
+        except Exception as e:
+            if self.external_mode:
                 raise RuntimeError(
                     f"Failed to connect to external server at {self.bind_ip}:{self.port}: {e}"
                 )
-            return self.client
-        else:
-            c = self.create_from_server(self)
-            try:
-                self._waitForPing(c)
-            except WaitTimeout:
-                raise RuntimeError("Failed to connect or ping server")
-            self.client = c
+            else:
+                raise RuntimeError(f"Failed to connect or ping server: {e}")
+        return self.client
 
     def wait_for_save_done(self, client=None):
         """Wait for the save to complete, failing if it does not complete successfully in the timeout"""
@@ -400,38 +382,36 @@ class ValkeyServerHandle(object):
     def is_rdb_done_loading(self):
         if self.external_mode:
             # Check if RDB loading is done by examining container logs
-            try:
-                # Find container using this port
-                result = subprocess.run(
-                    [
-                        "docker",
-                        "ps",
-                        "--format",
-                        "{{.Names}}",
-                        "--filter",
-                        f"publish={self.port}",
-                    ],
+            # Find container using this port
+            result = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "--format",
+                    "{{.Names}}",
+                    "--filter",
+                    f"publish={self.port}",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            container_names = result.stdout.strip().split("\n")
+            if container_names and container_names[0]:
+                container_name = container_names[0]
+                # Check container logs for RDB loading completion
+                logs = subprocess.run(
+                    ["docker", "logs", container_name],
                     capture_output=True,
                     text=True,
                     check=True,
                 )
-                container_names = result.stdout.strip().split("\n")
-                if container_names and container_names[0]:
-                    container_name = container_names[0]
-                    # Check container logs for RDB loading completion
-                    logs = subprocess.run(
-                        ["docker", "logs", container_name],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                    return (
-                        "Done loading RDB" in logs.stdout
-                        or "Done loading RDB" in logs.stderr
-                    )
-            except:
-                pass
-            return True  # Fallback to assume loaded
+                return (
+                    "Done loading RDB" in logs.stdout
+                    or "Done loading RDB" in logs.stderr
+                )
+            else:
+                raise RuntimeError(f"No Docker container found using port {self.port}")
         else:
             # Local server logic
             rdb_load_log = "Done loading RDB"
