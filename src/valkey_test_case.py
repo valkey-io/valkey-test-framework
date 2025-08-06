@@ -80,18 +80,19 @@ class ValkeyServerHandle(object):
         self.port = port
         self.bind_ip = bind_ip
 
+        self.args = {}
+        self.args["port"] = self.port
+        self.args["logfile"] = f"logfile_{port}"
+        self.args["dbfilename"] = f"testrdb-{port}.rdb"
+        self.cwd = cwd
+
         if external_mode:
             # External server setup
             self.clients = []
         else:
             # Local server setup
             self.server = None
-            self.args = {}
-            self.args["port"] = self.port
-            self.args["logfile"] = f"logfile_{port}"
-            self.args["dbfilename"] = f"testrdb-{port}.rdb"
             self.args["appenddirname"] = f"aof-{port}"
-            self.cwd = cwd
             self.valkey_path = server_path
             self.conf_file = None
 
@@ -376,37 +377,8 @@ class ValkeyServerHandle(object):
 
     def is_rdb_done_loading(self):
         if self.external_mode:
-            # Check if RDB loading is done by examining container logs
-            # Find container using this port
-            result = subprocess.run(
-                [
-                    "docker",
-                    "ps",
-                    "--format",
-                    "{{.Names}}",
-                    "--filter",
-                    f"publish={self.port}",
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            container_names = result.stdout.strip().split("\n")
-            if container_names and container_names[0]:
-                container_name = container_names[0]
-                # Check container logs for RDB loading completion
-                logs = subprocess.run(
-                    ["docker", "logs", container_name],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                return (
-                    "Done loading RDB" in logs.stdout
-                    or "Done loading RDB" in logs.stderr
-                )
-            else:
-                raise RuntimeError(f"No Docker container found using port {self.port}")
+            info = self.client.info()
+            return info.get('loading', 0) == 0
         else:
             # Local server logic
             rdb_load_log = "Done loading RDB"
