@@ -86,10 +86,7 @@ class ValkeyServerHandle(object):
         self.args["dbfilename"] = f"testrdb-{port}.rdb"
         self.cwd = cwd
 
-        if external_mode:
-            # External server setup
-            self.clients = []
-        else:
+        if not external_mode:
             # Local server setup
             self.server = None
             self.args["appenddirname"] = f"aof-{port}"
@@ -105,10 +102,7 @@ class ValkeyServerHandle(object):
         self.args.update(args)
 
     def get_new_client(self):
-        client = self.create_from_server()
-        if self.external_mode:
-            self.clients.append(client)
-        return client
+        return self.create_from_server()
 
     def exit(self, cleanup=True, remove_nodes_conf=True):
         # Client cleanup (same for both modes)
@@ -121,11 +115,8 @@ class ValkeyServerHandle(object):
             self.client.close()
             self.client = None
 
-        # External mode: clean up additional clients
+        # No server process to clean up if we're using an external server
         if self.external_mode:
-            for client in self.clients:
-                client.close()
-            self.clients.clear()
             return
 
         if self.server:
@@ -172,7 +163,7 @@ class ValkeyServerHandle(object):
             logging.warning("Server did not exit in time, killing...")
             if self.is_alive():
                 # check server is still running before kill it.
-                self.kill()
+                self.server.kill()
             try:
                 self.wait_for_shutdown()
             except WaitTimeout:
