@@ -85,7 +85,7 @@ class ValkeyServerHandle(object):
     @classmethod
     def create_from_server(self, server, db=0):
         logging.info(("Created regular client for port {}".format(server.port)))
-        r = StrictValkey(host="localhost", port=server.port, db=db)
+        r = StrictValkey(host=server.bind_ip, port=server.port, db=db)
         return r
 
     def set_startup_args(self, args):
