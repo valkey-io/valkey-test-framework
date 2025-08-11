@@ -77,21 +77,18 @@ class ValkeyServerHandle(object):
     ):
         self.external_mode = external_mode
         self.client = None
+        self.server = None
         self.port = port
         self.bind_ip = bind_ip
+        self.valkey_path = server_path
+        self.conf_file = None
 
         self.args = {}
         self.args["port"] = self.port
         self.args["logfile"] = f"logfile_{port}"
         self.args["dbfilename"] = f"testrdb-{port}.rdb"
+        self.args["appenddirname"] = f"aof-{port}"
         self.cwd = cwd
-
-        if not external_mode:
-            # Local server setup
-            self.server = None
-            self.args["appenddirname"] = f"aof-{port}"
-            self.valkey_path = server_path
-            self.conf_file = None
 
     def create_from_server(self, db=0):
         logging.info(("Created regular client for port {}".format(self.port)))
@@ -284,32 +281,10 @@ class ValkeyServerHandle(object):
 
     def restart(self, remove_rdb=True, remove_nodes_conf=True, connect_client=True):
         if self.external_mode:
-            # Docker restart logic
-            result = subprocess.run(
-                [
-                    "docker",
-                    "ps",
-                    "--format",
-                    "{{.Names}}",
-                    "--filter",
-                    f"publish={self.port}",
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
+            return self._test_instance.restart_external_server(
+                self, remove_rdb, remove_nodes_conf, connect_client
             )
-            container_names = result.stdout.strip().split("\n")
-            if container_names and container_names[0]:
-                container_name = container_names[0]
-                subprocess.run(["docker", "restart", container_name], check=True)
-                time.sleep(3)
-            else:
-                raise RuntimeError(f"No Docker container found using port {self.port}")
-
-            if connect_client:
-                self.connect()
         else:
-            # Local server restart logic
             self.exit(remove_rdb, remove_nodes_conf)
             self.start(connect_client=connect_client)
 
@@ -552,10 +527,11 @@ class ValkeyTestCase(ValkeyTestCaseBase):
             if not port:
                 raise ValueError("Port must be specified for external server")
 
-            valkey_server = ValkeyServerHandle(
-                bind_ip, port, port_tracker=None, external_mode=True
-            )
+            valkey_server = ValkeyServerHandle(bind_ip, port, port_tracker=None, external_mode=True)
+            
+            valkey_server._test_instance = self
             valkey_cli = valkey_server.connect()
+
             if not skip_teardown:
                 self.server_list.append(valkey_server)
             return valkey_server, valkey_cli
