@@ -527,8 +527,10 @@ class ValkeyTestCase(ValkeyTestCaseBase):
             if not port:
                 raise ValueError("Port must be specified for external server")
 
-            valkey_server = ValkeyServerHandle(bind_ip, port, port_tracker=None, external_mode=True)
-            
+            valkey_server = ValkeyServerHandle(
+                bind_ip, port, port_tracker=None, external_mode=True
+            )
+
             valkey_server._test_instance = self
             valkey_cli = valkey_server.connect()
 
