@@ -75,20 +75,19 @@ class ValkeyServerHandle(object):
         cwd=".",
         external_mode=False,
     ):
-        self.external_mode = external_mode
-        self.client = None
         self.server = None
+        self.client = None
+        self.external_mode = external_mode
         self.port = port
         self.bind_ip = bind_ip
-        self.valkey_path = server_path
-        self.conf_file = None
-
         self.args = {}
         self.args["port"] = self.port
         self.args["logfile"] = f"logfile_{port}"
         self.args["dbfilename"] = f"testrdb-{port}.rdb"
         self.args["appenddirname"] = f"aof-{port}"
         self.cwd = cwd
+        self.valkey_path = server_path
+        self.conf_file = None
 
     def create_from_server(self, db=0):
         logging.info(("Created regular client for port {}".format(self.port)))
@@ -102,7 +101,6 @@ class ValkeyServerHandle(object):
         return self.create_from_server()
 
     def exit(self, cleanup=True, remove_nodes_conf=True):
-        # Client cleanup (same for both modes)
         if self.client:
             if not self.external_mode:
                 try:
@@ -311,11 +309,12 @@ class ValkeyServerHandle(object):
         )
 
     def connect(self):
-        self.client = self.create_from_server()
+        c = self.create_from_server()
         try:
-            self.client.ping()
-        except Exception as e:
+            self._waitForPing(c)
+        except WaitTimeout:
             raise RuntimeError("Failed to connect or ping server")
+        self.client = c
         return self.client
 
     def wait_for_save_done(self, client=None):
