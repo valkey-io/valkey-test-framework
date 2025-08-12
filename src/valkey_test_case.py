@@ -67,10 +67,17 @@ class ValkeyServerHandle(object):
     DEFAULT_BIND_IP = "0.0.0.0"
 
     def __init__(
-        self, bind_ip, port, port_tracker, server_path="valkey-server", cwd="."
+        self,
+        bind_ip,
+        port,
+        port_tracker,
+        server_path="valkey-server",
+        cwd=".",
+        external_mode=False,
     ):
         self.server = None
         self.client = None
+        self.external_mode = external_mode
         self.port = port
         self.bind_ip = bind_ip
         self.args = {}
@@ -82,26 +89,30 @@ class ValkeyServerHandle(object):
         self.valkey_path = server_path
         self.conf_file = None
 
-    @classmethod
-    def create_from_server(self, server, db=0):
-        logging.info(("Created regular client for port {}".format(server.port)))
-        r = StrictValkey(host=server.bind_ip, port=server.port, db=db)
+    def create_from_server(self, db=0):
+        logging.info(("Created regular client for port {}".format(self.port)))
+        r = StrictValkey(host=self.bind_ip, port=self.port, db=db)
         return r
 
     def set_startup_args(self, args):
         self.args.update(args)
 
     def get_new_client(self):
-        return self.create_from_server(self)
+        return self.create_from_server()
 
     def exit(self, cleanup=True, remove_nodes_conf=True):
         if self.client:
-            try:
-                self.client.shutdown("nosave")
-            except:
-                logging.warning("SHUTDOWN was unsuccessful")
-
+            if not self.external_mode:
+                try:
+                    self.client.shutdown("nosave")
+                except:
+                    logging.warning("SHUTDOWN was unsuccessful")
+            self.client.close()
             self.client = None
+
+        # No server process to clean up if we're using an external server
+        if self.external_mode:
+            return
 
         if self.server:
             self._waitForExit()
@@ -147,7 +158,7 @@ class ValkeyServerHandle(object):
             logging.warning("Server did not exit in time, killing...")
             if self.is_alive():
                 # check server is still running before kill it.
-                self.kill()
+                self.server.kill()
             try:
                 self.wait_for_shutdown()
             except WaitTimeout:
@@ -267,8 +278,13 @@ class ValkeyServerHandle(object):
         return self.client
 
     def restart(self, remove_rdb=True, remove_nodes_conf=True, connect_client=True):
-        self.exit(remove_rdb, remove_nodes_conf)
-        self.start(connect_client=connect_client)
+        if self.external_mode:
+            return self._test_instance.restart_external_server(
+                self, remove_rdb, remove_nodes_conf, connect_client
+            )
+        else:
+            self.exit(remove_rdb, remove_nodes_conf)
+            self.start(connect_client=connect_client)
 
     def is_alive(self):
         try:
@@ -293,12 +309,13 @@ class ValkeyServerHandle(object):
         )
 
     def connect(self):
-        c = self.create_from_server(self)
+        c = self.create_from_server()
         try:
             self._waitForPing(c)
         except WaitTimeout:
             raise RuntimeError("Failed to connect or ping server")
         self.client = c
+        return self.client
 
     def wait_for_save_done(self, client=None):
         """Wait for the save to complete, failing if it does not complete successfully in the timeout"""
@@ -324,8 +341,13 @@ class ValkeyServerHandle(object):
         )
 
     def is_rdb_done_loading(self):
-        rdb_load_log = "Done loading RDB"
-        return self.verify_string_in_logfile(rdb_load_log) == True
+        if self.external_mode:
+            info = self.client.info()
+            return info.get("loading", 0) == 0
+        else:
+            # Local server logic
+            rdb_load_log = "Done loading RDB"
+            return self.verify_string_in_logfile(rdb_load_log) == True
 
     def num_replicas_online(self, client=None):
         if client is None:
@@ -495,12 +517,32 @@ class ValkeyTestCase(ValkeyTestCaseBase):
         args="",
         skip_teardown=False,
         conf_file=None,
+        external_server=False,
     ):
+
+        if external_server:
+            if not bind_ip:
+                raise ValueError("Bind ip must be specified for external server use")
+            if not port:
+                raise ValueError("Port must be specified for external server use")
+
+            valkey_server = ValkeyServerHandle(
+                bind_ip, port, port_tracker=None, external_mode=True
+            )
+
+            valkey_server._test_instance = self
+            valkey_cli = valkey_server.connect()
+
+            if not skip_teardown:
+                self.server_list.append(valkey_server)
+            return valkey_server, valkey_cli
+
         if not bind_ip:
             bind_ip = self.get_bind_ip()
 
         if not port:
             port = self.get_bind_port()
+
         valkey_server_handle = self.get_valkey_handle()
         self.server_path = server_path
         valkey_server = valkey_server_handle(
