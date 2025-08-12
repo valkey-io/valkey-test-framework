@@ -522,9 +522,9 @@ class ValkeyTestCase(ValkeyTestCaseBase):
 
         if external_server:
             if not bind_ip:
-                bind_ip = "localhost"
+                raise ValueError("Bind ip must be specified for external server use")
             if not port:
-                raise ValueError("Port must be specified for external server")
+                raise ValueError("Port must be specified for external server use")
 
             valkey_server = ValkeyServerHandle(
                 bind_ip, port, port_tracker=None, external_mode=True
