@@ -25,4 +25,4 @@ class TestRestart(ValkeyTestCase):
         #
         # Prove that the restart didn't overwrite the RDB file.
         #
-        assert self.client.get("a") == b'1'
+        assert self.client.get("a") == b"1"
