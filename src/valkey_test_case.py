@@ -311,12 +311,14 @@ class ValkeyServerHandle(object):
 
     def connect(self):
         self.client = self.create_from_server()
+
         def safeping(client):
             try:
                 client.ping()
                 return True
             except:
                 return False
+
         wait_for_true(lambda: safeping(self.client), timeout=TEST_MAX_WAIT_TIME_SECONDS)
         return self.client
 
