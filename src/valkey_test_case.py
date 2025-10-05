@@ -104,7 +104,7 @@ class ValkeyServerHandle(object):
         if self.client:
             if not self.external_mode:
                 try:
-                    self.client.shutdown("nosave")
+                    self.client.execute_command("shutdown nosave")
                 except:
                     logging.warning("SHUTDOWN was unsuccessful")
             self.client.close()
@@ -266,14 +266,15 @@ class ValkeyServerHandle(object):
                 self.wait_for_ready_to_accept_connections()
             except WaitTimeout:
                 raise RuntimeError("Valkey server is not Ready to accept connections")
-            try:
-                self.connect()
-            except:
-                # It's possible that the port was not fully released, so try again
-                self.server.kill()
-                time.sleep(1)
-                self.server = subprocess.Popen(server_args, cwd=self.cwd)
-                self.connect()
+            if wait_for_ping:
+                try:
+                    self.connect()
+                except:
+                    # It's possible that the port was not fully released, so try again
+                    self.server.kill()
+                    time.sleep(1)
+                    self.server = subprocess.Popen(server_args, cwd=self.cwd)
+                    self.connect()
 
         return self.client
 
@@ -309,12 +310,14 @@ class ValkeyServerHandle(object):
         )
 
     def connect(self):
-        c = self.create_from_server()
-        try:
-            self._waitForPing(c)
-        except WaitTimeout:
-            raise RuntimeError("Failed to connect or ping server")
-        self.client = c
+        self.client = self.create_from_server()
+        def safeping(client):
+            try:
+                client.ping()
+                return True
+            except:
+                return False
+        wait_for_true(lambda: safeping(self.client), timeout=TEST_MAX_WAIT_TIME_SECONDS)
         return self.client
 
     def wait_for_save_done(self, client=None):
