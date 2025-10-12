@@ -225,6 +225,8 @@ class ValkeyServerHandle(object):
         if self.server:
             raise RuntimeError("Server already started")
         server_args = []
+        if "VALGRIND_OPTIONS" in os.environ:
+            server_args.extend(["valgrind", os.environ["VALGRIND_OPTIONS"]])
         server_args.extend([self.valkey_path])
 
         # If configuration file was provided, pass it
@@ -288,15 +290,25 @@ class ValkeyServerHandle(object):
             self.start(connect_client=connect_client)
 
     def is_alive(self):
+        return self._is_alive(self.client)
+    
+    def _is_alive(self, c):
         try:
-            self.client.ping()
+            c.ping()
+            return True
+        except:
+            return False
+    
+    def connection_is_alive(self, c):
+        try:
+            c.ping()
             return True
         except:
             return False
 
     def _waitForPing(self, c):
         try:
-            wait_for_true(lambda: c.ping(), timeout=MAX_PING_WAIT_TIME)
+            wait_for_true(lambda: self._is_alive(c), timeout=MAX_PING_WAIT_TIME)
             return True
         except (ConnectionError, TimeoutError) as e:
             logging.error(e)
