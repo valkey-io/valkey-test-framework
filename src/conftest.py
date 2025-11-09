@@ -22,9 +22,10 @@ class PortTracker(object):
     """
 
     CLUSTER_BUS_PORT_OFFSET = 10000
+    SEARCH_COORDINATOR_PORT_OFFSET = 20294
     MIN_PORT = 5000
     MAX_PORT = 32768  # this is the lower ephemeral port range
-    MAX_BASE_PORT = MAX_PORT - CLUSTER_BUS_PORT_OFFSET - MIN_PORT
+    MAX_BASE_PORT = MAX_PORT - max(CLUSTER_BUS_PORT_OFFSET, SEARCH_COORDINATOR_PORT_OFFSET) - MIN_PORT
     MAX_RETRIES = 100
     LOCKS_DIR = os.path.join(tempfile.gettempdir(), "port_tracker")
 
@@ -85,6 +86,9 @@ class PortTracker(object):
             if not self._try_lock_port(port):
                 continue
             if not self._try_lock_port(port + PortTracker.CLUSTER_BUS_PORT_OFFSET):
+                self._unlock_port(port)
+                continue
+            if not self._try_lock_port(port + PortTracker.SEARCH_COORDINATOR_PORT_OFFSET):
                 self._unlock_port(port)
                 continue
             return port
