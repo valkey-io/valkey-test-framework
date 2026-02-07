@@ -2,3 +2,4 @@ valkey
 pytest==6
 black
 pytest-order
+numpy
