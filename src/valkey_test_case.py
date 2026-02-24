@@ -291,14 +291,14 @@ class ValkeyServerHandle(object):
 
     def is_alive(self):
         return self._is_alive(self.client)
-    
+
     def _is_alive(self, c):
         try:
             c.ping()
             return True
         except:
             return False
-    
+
     def connection_is_alive(self, c):
         try:
             c.ping()
@@ -535,6 +535,8 @@ class ValkeyTestCase(ValkeyTestCaseBase):
         skip_teardown=False,
         conf_file=None,
         external_server=False,
+        wait_for_ping=True,
+        connect_client=True,
     ):
 
         if external_server:
@@ -573,7 +575,9 @@ class ValkeyTestCase(ValkeyTestCaseBase):
             self.server_list.append(valkey_server)
         valkey_server.conf_file = conf_file
         valkey_server.args.update(args)
-        valkey_cli = valkey_server.start()
+        valkey_cli = valkey_server.start(
+            wait_for_ping=wait_for_ping, connect_client=connect_client
+        )
         return valkey_server, valkey_cli
 
     def wait_for_all_replicas_online(self, n):
