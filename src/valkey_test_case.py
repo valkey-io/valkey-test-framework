@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from functools import wraps
 from valkey import *
 from util.waiters import *
-
+from valkey.cluster import VALKEY_CLUSTER_HASH_SLOTS
 from enum import Enum
 
 MAX_PING_TRIES = 60
@@ -730,28 +730,15 @@ class ReplicationTestCase(ValkeyTestCase):
         )
 
 
-from valkey.cluster import VALKEY_CLUSTER_HASH_SLOTS
-
-
 class ClusterInfo:
     """Contains information about a point in time of a Valkey cluster."""
 
     def __init__(self, info):
         self.info = info
 
-    def get_cluster_my_epoch(self):
-        return self.info["cluster_my_epoch"]
-
-    def get_cluster_epoch(self):
-        return self.info["cluster_current_epoch"]
-
     def is_cluster_ok(self):
         """Return True if the cluster state is OK."""
         return self.info["cluster_state"] == "ok"
-
-    def is_cluster_down(self):
-        """Return True if the cluster state is fail."""
-        return self.info["cluster_state"] == "fail"
 
     def cluster_known_nodes(self):
         """Return the number of nodes known to this node."""
@@ -907,6 +894,7 @@ class ClusterTestCase(ValkeyTestCase):
             node.wait_for_cluster_known_nodes(num_nodes)
 
     def assign_slots_to_nodes(self, num_nodes):
+        """Equally distribute sequential slots to each node."""
         slot_slice = VALKEY_CLUSTER_HASH_SLOTS / num_nodes
         for i in range(num_nodes):
             slot_min = int(round(slot_slice * i))
