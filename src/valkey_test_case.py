@@ -1,3 +1,4 @@
+import logging
 import subprocess
 import time
 import os
@@ -728,3 +729,154 @@ class ReplicationTestCase(ValkeyTestCase):
             pinfo.get_primary_repl_offset(),
             timeout=TEST_MAX_WAIT_TIME_SECONDS,
         )
+
+
+class ReuseServerTestCase(ValkeyTestCase):
+    """Test case that reuses a single server across all tests in the class.
+
+    Instead of spawning a fresh server per test, one server is started on the
+    first create_server() call and reused for all subsequent tests. Between
+    tests, _reset_server_state() restores isolation by running: RESET on the
+    shared connection, CLIENT KILL for connections a test spawned, REPLICAOF NO
+    ONE, FLUSHALL, CONFIG RESETSTAT, SCRIPT FLUSH, FUNCTION FLUSH, SLOWLOG /
+    LATENCY / ACL LOG resets, ACL user reset, and full config restore.
+
+    Usage — just change your base class:
+
+        class MyModuleTestCase(ReuseServerTestCase):
+            ...  # keep your existing setup_test exactly as-is
+
+    That's it. self.server, self.client, create_server() all work as before.
+    """
+
+    def create_server(
+        self,
+        testdir=None,
+        bind_ip=None,
+        port=None,
+        server_path=None,
+        args="",
+        skip_teardown=False,
+        conf_file=None,
+        external_server=False,
+        wait_for_ping=True,
+        connect_client=True,
+    ):
+        # Return cached server if already running — no new server is created.
+        if hasattr(self.__class__, "_shared_server") and self.__class__._shared_server:
+            return self.__class__._shared_server, self.__class__._shared_client
+
+        if testdir is None:
+            testdir = self.testdir
+        if server_path is None:
+            server_path = self.server_path
+
+        server, client = super().create_server(
+            testdir=testdir,
+            bind_ip=bind_ip,
+            port=port,
+            server_path=server_path,
+            args=args,
+            skip_teardown=skip_teardown,
+            conf_file=conf_file,
+            external_server=external_server,
+            wait_for_ping=wait_for_ping,
+            connect_client=connect_client,
+        )
+        self.__class__._shared_server = server
+        self.__class__._shared_client = client
+        self.__class__._initial_config = client.config_get("*")
+        return server, client
+
+    def teardown(self):
+        # Reset shared server state between tests instead of shutting it down.
+        if hasattr(self.__class__, "_shared_server") and self.__class__._shared_server:
+            self._reset_server_state()
+        # Clean up any additional servers created during this test.
+        for server in self.server_list:
+            if server and server is not self.__class__._shared_server:
+                server.exit()
+        self.server_list = []
+
+    def _reset_server_state(self):
+        """Reset the shared server to a clean state between tests.
+
+        Resets the shared connection, kills any client connections a test
+        spawned, clears data, scripts, functions, server-side logs (slowlog,
+        latency, ACL log), and ACL users, unwinds replication, and restores all
+        config values to their initial state. If the server is unreachable or a
+        config cannot be restored, the server is killed so the next test gets a
+        fresh instance.
+        """
+        client = self.__class__._shared_client
+        try:
+            # RESET the shared connection first to clear any per-connection
+            # state a test left behind (MULTI/WATCH, CLIENT TRACKING, RESP
+            # version, selected DB, MONITOR/pubsub). Doing this first ensures
+            # the following commands aren't silently queued inside a MULTI.
+            client.execute_command("RESET")
+            # Kill any client connections a test spawned. CLIENT KILL defaults
+            # to SKIPME yes, so the shared client issuing this is not killed.
+            client.execute_command("CLIENT", "KILL", "TYPE", "normal")
+            client.execute_command("REPLICAOF", "NO", "ONE")
+            client.flushall()
+            client.execute_command("CONFIG", "RESETSTAT")
+            client.execute_command("SCRIPT", "FLUSH")
+            try:
+                client.execute_command("FUNCTION", "FLUSH")
+            except Exception:
+                pass
+            # Clear server-side logs so per-test log checks start clean.
+            client.execute_command("SLOWLOG", "RESET")
+            client.execute_command("LATENCY", "RESET")
+            client.execute_command("ACL", "LOG", "RESET")
+            users = client.execute_command("ACL", "LIST")
+            for entry in users:
+                if isinstance(entry, bytes):
+                    entry = entry.decode()
+                if not entry.startswith("user default "):
+                    username = entry.split(" ")[1]
+                    client.execute_command("ACL", "DELUSER", username)
+            client.execute_command(
+                "ACL",
+                "SETUSER",
+                "default",
+                "reset",
+                "on",
+                "nopass",
+                "~*",
+                "&*",
+                "+@all",
+            )
+            if hasattr(self.__class__, "_initial_config"):
+                current = client.config_get("*")
+                for key, val in self.__class__._initial_config.items():
+                    if current.get(key) != val:
+                        try:
+                            client.config_set(key, val)
+                        except Exception:
+                            logging.warning(
+                                f"Could not reset config '{key}' — "
+                                f"tearing down server for fresh restart"
+                            )
+                            self.__class__._shared_server.exit()
+                            self.__class__._shared_server = None
+                            self.__class__._shared_client = None
+                            return
+        except Exception:
+            logging.warning("Server unreachable during teardown — killing process")
+            self.__class__._shared_server.exit()
+            self.__class__._shared_server = None
+            self.__class__._shared_client = None
+
+    @pytest.fixture(autouse=True, scope="class")
+    def class_teardown(self, request):
+        yield
+        if hasattr(self.__class__, "_shared_server") and self.__class__._shared_server:
+            self.__class__._shared_server.exit()
+            self.__class__._shared_server = None
+            self.__class__._shared_client = None
+        for server in getattr(self, "server_list", []):
+            if server:
+                server.exit()
+        self.server_list = []

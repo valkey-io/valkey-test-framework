@@ -67,4 +67,42 @@ class TestExamplePerClassSetup(ExampleTestCaseBase):
         client.execute_command("SET K V")
 ```
 
+**Reusing a Single Server Across All Tests in a Class**
+
+If your tests don't need a fresh server each time (most data-operation tests), use `ReuseServerTestCase` to share one server across the entire class. This avoids the overhead of spawning a new process per test — especially useful when module loading is expensive.
+
+```
+class ExampleModuleTestCase(ReuseServerTestCase):
+    @pytest.fixture(autouse=True)
+    def setup_test(self, setup):
+        server_path = "/path_to_your_valkey_server_binary"
+        args = {"loadmodule": "/path/to/your/module.so"}
+        self.server, self.client = self.create_server(
+            testdir=self.testdir, server_path=server_path, args=args
+        )
+
+class TestExampleReuse(ExampleModuleTestCase):
+    """
+    All tests share the same server. Server state is reset between
+    tests automatically (FLUSHALL, config restore, ACL reset, etc.)
+    for isolation.
+    """
+
+    def test_basic1(self):
+        self.client.execute_command("SET K V")
+        assert self.client.execute_command("GET K") == b"V"
+
+    def test_basic2(self):
+        # Previous test's data is flushed — this starts clean
+        assert self.client.execute_command("GET K") is None
+```
+
+`ReuseServerTestCase` inherits `ValkeyTestCase`, so all existing fixtures, `create_server()` calls, and `self.server`/`self.client` assignments work unchanged. To adopt it in your module, just change the base class — no other code changes needed.
+
+`create_server()` only starts the server on the first call — subsequent calls return the cached instance. Between tests, the overridden `teardown()` resets state instead of killing the server: it issues `RESET` on the shared connection, kills any client connections a test spawned, flushes data/scripts/functions, resets ACL users and the slowlog/latency/ACL logs, and restores any modified config values. If the server becomes unreachable or a config cannot be restored, it is torn down and a fresh one starts for the next test.
+
+If a test creates additional servers (e.g. a server without a module loaded for RDB testing), those are tracked in `server_list` and automatically cleaned up at the end of that test. Only the shared server persists across tests.
+
+Tests run top-to-bottom in definition order (via `pytest-order` with `--order-scope=class`).
+
 For more examples, refer to the `tests` directory of this package.
