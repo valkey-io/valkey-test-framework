@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from functools import wraps
 from valkey import *
 from util.waiters import *
-
+from valkey.cluster import VALKEY_CLUSTER_HASH_SLOTS, ValkeyCluster
 from enum import Enum
 
 MAX_PING_TRIES = 60
@@ -728,3 +728,364 @@ class ReplicationTestCase(ValkeyTestCase):
             pinfo.get_primary_repl_offset(),
             timeout=TEST_MAX_WAIT_TIME_SECONDS,
         )
+
+
+class ClusterInfo:
+    """Contains information about a point in time of a Valkey cluster."""
+
+    def __init__(self, info):
+        self.info = info
+
+    def is_cluster_ok(self):
+        """Return True if the cluster state is OK."""
+        return self.info["cluster_state"] == "ok"
+
+    def cluster_known_nodes(self):
+        """Return the number of nodes known to this node."""
+        return int(self.info["cluster_known_nodes"])
+
+    def cluster_slots_assigned(self):
+        """Return the number of hash slots currently assigned."""
+        return int(self.info["cluster_slots_assigned"])
+
+
+class ClusterNodeHandle(ValkeyServerHandle):
+    """Handle to a valkey server process running in cluster mode enabled (CME)."""
+
+    def __init__(
+        self,
+        bind_ip,
+        port,
+        port_tracker,
+        testdir,
+        server_path="valkey-server",
+    ):
+        super(ClusterNodeHandle, self).__init__(
+            bind_ip, port, port_tracker, server_path=server_path, cwd=testdir
+        )
+        # Start the node in cluster mode. The cluster-config-file (nodes.conf)
+        # is per-node and cleaned up by the base class teardown.
+        self.args["cluster-enabled"] = "yes"
+        self.args["cluster-config-file"] = "nodes_{}_{}.conf".format(bind_ip, port)
+        self.args["cluster-node-timeout"] = "2000"
+        self.masterid = None
+        self.nodeid = None
+
+    def _set_node_id(self):
+        # CLUSTER NODES should return only one node - myself after startup
+        # Read the node id
+        nodes = self.client.cluster("NODES")
+        for key in nodes:
+            if re.match("myself", nodes[key]["flags"]):
+                self.nodeid = nodes[key]["node_id"]
+                logging.info(
+                    "Cluster node {} has node id {}".format(self.port, self.nodeid)
+                )
+                return
+
+    def connect(self):
+        client = super(ClusterNodeHandle, self).connect()
+        self._set_node_id()
+        return client
+
+    def meet(self, ip, port):
+        return self.client.execute_command("CLUSTER", "MEET", ip, port)
+
+    def replicate(self, node_id):
+        self.masterid = node_id
+        return self.client.execute_command("CLUSTER", "REPLICATE", node_id)
+
+    def assign_slots(self, *args):
+        """
+        Assign multiple ranges of slots to this node.
+        Accepts multiple pairs that are interpretted as [low,high)
+        assign_slots(0,10) -> [0..9]
+        assign_slots(0,10,15,20) -> [0..9] and [15..19]
+        """
+        assert len(args) % 2 == 0
+        command = ["CLUSTER", "ADDSLOTSRANGE"]
+        for t in range(0, len(args), 2):
+            command.extend([args[t], args[t + 1] - 1])
+        return self.client.execute_command(*command)
+
+    # Building blocks for moving a slot from one node to another.
+    # ClusterTestCase.migrate_slot() calls these in the right order.
+
+    def count_keys_in_slot(self, slot):
+        """How many keys this node currently holds in the given slot."""
+        return int(self.client.execute_command("CLUSTER", "COUNTKEYSINSLOT", slot))
+
+    def start_importing_slot(self, slot, source_id):
+        """Tell this node to start accepting a slot coming from source_id."""
+        return self.client.execute_command(
+            "CLUSTER", "SETSLOT", slot, "IMPORTING", source_id
+        )
+
+    def start_migrating_slot(self, slot, target_id):
+        """Tell this node it is handing a slot over to target_id."""
+        return self.client.execute_command(
+            "CLUSTER", "SETSLOT", slot, "MIGRATING", target_id
+        )
+
+    def assign_slot_owner(self, slot, owner_id):
+        """Record which node now owns the slot. Only valid on a primary."""
+        return self.client.execute_command("CLUSTER", "SETSLOT", slot, "NODE", owner_id)
+
+    def get_slot_owner_id(self, slot):
+        """Which node id THIS node believes owns the given slot (or None)."""
+        for slot_range in self.client.cluster("SLOTS"):
+            start, end = slot_range[0], slot_range[1]
+            if start <= slot <= end:
+                return slot_range[2][2].decode()
+        return None
+
+    def is_primary(self):
+        """True if this node is currently a primary (master), not a replica."""
+        role = self.client.execute_command("ROLE")[0]
+        return role in (b"master", "master")
+
+    def wait_for_cluster_known_nodes(self, count):
+        """Wait until we are connected to exactly count nodes."""
+        wait_for_equal(
+            lambda: ClusterInfo(self.client.cluster("INFO")).cluster_known_nodes(),
+            count,
+            timeout=TEST_MAX_WAIT_TIME_SECONDS,
+        )
+
+    def wait_for_cluster_known_node(self, nodeid):
+        def knows():
+            nodesInfo = self.client.cluster("NODES")
+            for key in nodesInfo:
+                if nodeid == nodesInfo[key]["node_id"]:
+                    return True
+            return False
+
+        wait_for_true(knows, timeout=TEST_MAX_WAIT_TIME_SECONDS)
+
+    def wait_for_cluster_ok(self):
+        wait_for_true(
+            lambda: ClusterInfo(self.client.cluster("INFO")).is_cluster_ok(),
+            timeout=TEST_MAX_WAIT_TIME_SECONDS,
+        )
+
+
+class ClusterTestCase(ValkeyTestCase):
+    """Base class for Cluster Mode Enabled (CME) tests."""
+
+    @pytest.fixture(autouse=True)
+    def cluster_setup(self):
+        # Per-test cluster state. Initialized here rather than as class-level
+        # attributes so each test starts with its own node list.
+        self.nodes = []
+        self.cluster_client = None
+        yield
+        self.teardown()
+
+    def create_node(self, bind_ip=None, port=None):
+        """Create a single cluster-mode node and register it for teardown."""
+        if not bind_ip:
+            bind_ip = self.get_bind_ip()
+        if not port:
+            port = self.get_bind_port()
+
+        node = ClusterNodeHandle(
+            bind_ip=bind_ip,
+            port=port,
+            port_tracker=self.port_tracker,
+            testdir=self.testdir,
+            server_path=self.server_path,
+        )
+        node.args.update(self.args)
+        self.nodes.append(node)
+        # Registered in server_list so ValkeyTestCase.teardown reclaims it.
+        self.server_list.append(node)
+        return node
+
+    def create_nodes(self, num_nodes):
+        for _ in range(num_nodes):
+            self.create_node()
+        return self.nodes
+
+    def start_all_nodes(self, wait_for_ping=True, connect_client=True):
+        for node in self.nodes:
+            node.start(wait_for_ping=wait_for_ping, connect_client=connect_client)
+
+    def create_cluster(self, num_nodes):
+        """Start `num_nodes` nodes and gossip them into a single cluster."""
+        self.create_nodes(num_nodes)
+        self.start_all_nodes()
+
+        # Introduce every other node to the first node; gossip propagates the
+        # full topology from there.
+        for i in range(1, num_nodes):
+            self.nodes[0].meet(self.nodes[i].bind_ip, self.nodes[i].port)
+
+        # Wait until every node has discovered the whole cluster.
+        for node in self.nodes:
+            node.wait_for_cluster_known_nodes(num_nodes)
+
+    def assign_slots_to_nodes(self, num_nodes):
+        """Equally distribute sequential slots to each node."""
+        slot_slice = VALKEY_CLUSTER_HASH_SLOTS / num_nodes
+        for i in range(num_nodes):
+            slot_min = int(round(slot_slice * i))
+            slot_max = int(round(slot_slice * (i + 1)))
+            self.nodes[i].assign_slots(slot_min, slot_max)
+
+    def setup_replicas(self, num_shards, num_replicas_per_shard):
+        """Attach the remaining nodes as replicas, round-robin across shards."""
+        total = num_shards * (1 + num_replicas_per_shard)
+        for i in range(num_shards, total):
+            shard_idx = i % num_shards
+            primary = self.nodes[shard_idx]
+            # Make sure the replica knows the primary before replicating.
+            self.nodes[i].wait_for_cluster_known_node(primary.nodeid)
+            self.nodes[i].replicate(primary.nodeid)
+
+        # Wait for each shard's replicas to come online and sync up.
+        for i in range(num_shards):
+            wait_for_equal(
+                lambda primary=self.nodes[i]: primary.num_replicas_online(),
+                num_replicas_per_shard,
+                timeout=MAX_REPLICA_WAIT_TIME,
+            )
+        for i in range(num_shards, total):
+            self.waitForReplicaToSyncUp(self.nodes[i])
+            # Allow read-only queries to be served by the replica.
+            self.nodes[i].client.readonly()
+
+    def setup_cluster(self, num_shards, num_replicas_per_shard):
+        """Create and fully bootstrap a cluster, returning a cluster client.
+
+        When this returns the cluster is in the 'ok' state and ready to serve.
+        """
+        total_nodes = num_shards * (1 + num_replicas_per_shard)
+        self.create_cluster(total_nodes)
+
+        self.assign_slots_to_nodes(num_shards)
+
+        # Bump each primary's config epoch so replicas don't overtake it via
+        # epoch collision resolution.
+        for i in range(num_shards):
+            self.nodes[i].client.execute_command("CLUSTER", "BUMPEPOCH")
+
+        if num_replicas_per_shard > 0:
+            self.setup_replicas(num_shards, num_replicas_per_shard)
+
+        # Wait for every node to agree the cluster is healthy.
+        for node in self.nodes:
+            node.wait_for_cluster_ok()
+
+        self.cluster_client = self.get_cluster_client()
+        return self.cluster_client
+
+    def get_cluster_client(self):
+        """Return a cluster-aware client that follows MOVED/ASK redirections."""
+        primary = self.nodes[0]
+        # A cluster client discovers the topology by connecting to the host each
+        # node advertises in CLUSTER SLOTS, not the bind address. When a node
+        # binds the wildcard 0.0.0.0 it advertises a concrete, connectable host
+        # (typically loopback) instead, so read that advertised host back and
+        # seed the client with it rather than the bind address.
+        host = primary.bind_ip
+        for slot_range in primary.client.cluster("SLOTS"):
+            # slot_range = [start, end, [host, port, node_id, ...], ...]
+            owner_host, _, owner_id = (
+                slot_range[2][0],
+                slot_range[2][1],
+                slot_range[2][2],
+            )
+            if owner_id.decode() == primary.nodeid:
+                host = owner_host.decode()
+                break
+        return ValkeyCluster(host=host, port=primary.port)
+
+    def get_slot_owner(self, slot):
+        """Return the node that currently owns `slot`, or None if unassigned."""
+        for slot_range in self.nodes[0].client.cluster("SLOTS"):
+            start, end, owner_id = (
+                slot_range[0],
+                slot_range[1],
+                slot_range[2][2].decode(),
+            )
+            if start <= slot <= end:
+                return next((n for n in self.nodes if n.nodeid == owner_id), None)
+        return None
+
+    def wait_for_slot_owner(self, slot, expected_owner):
+        """Wait until all nodes agree `expected_owner` owns `slot`.
+
+        New ownership has to gossip across the cluster after a migration, so we
+        poll instead of sleeping for a fixed guess.
+        """
+        wait_for_true(
+            lambda: all(
+                node.get_slot_owner_id(slot) == expected_owner.nodeid
+                for node in self.nodes
+            ),
+            timeout=TEST_MAX_WAIT_TIME_SECONDS,
+        )
+
+    def migrate_slot(self, source, target, slot, dbs=(0,), timeout_ms=5000):
+        """Move a slot and all its keys from source to target, then hand off
+        ownership.
+
+        Runs the manual migration protocol: mark the slot IMPORTING on the
+        target and MIGRATING on the source, batch-move every key in the slot
+        with MIGRATE, then announce the new owner on every primary. Replicas
+        reject CLUSTER SETSLOT and learn the new owner from their primary, so
+        they are skipped.
+
+        `dbs` lists which databases to move keys from. Migrating any DB other
+        than 0 requires the cluster to be started with `cluster-databases > 1`;
+        plain cluster mode only has DB 0.
+        """
+        target.start_importing_slot(slot, source.nodeid)
+        source.start_migrating_slot(slot, target.nodeid)
+
+        # Move keys on a dedicated connection so the caller's client keeps its
+        # own selected DB. GETKEYSINSLOT only sees the connection's current DB,
+        # so we select each DB in turn and drain the slot in batches.
+        conn = source.get_new_client()
+        try:
+            for db in dbs:
+                conn.execute_command("SELECT", db)
+                while True:
+                    keys = conn.execute_command("CLUSTER", "GETKEYSINSLOT", slot, 100)
+                    if not keys:
+                        break
+                    conn.execute_command(
+                        "MIGRATE",
+                        target.bind_ip,
+                        target.port,
+                        "",
+                        db,
+                        timeout_ms,
+                        "KEYS",
+                        *keys,
+                    )
+        finally:
+            conn.close()
+
+        # Finalize ownership target-first: the target (and its replicas) must
+        # persist the new topology before the source gives up the slot. An
+        # out-of-order handoff where the source releases first could leave the
+        # slot ownerless if the target then fails. Remaining primaries are
+        # updated afterward; replicas learn from their primary / via gossip.
+        target.assign_slot_owner(slot, target.nodeid)
+        source.assign_slot_owner(slot, target.nodeid)
+        for node in self.nodes:
+            if node.is_primary() and node.nodeid not in (
+                target.nodeid,
+                source.nodeid,
+            ):
+                node.assign_slot_owner(slot, target.nodeid)
+
+    def teardown(self):
+        if self.cluster_client is not None:
+            try:
+                self.cluster_client.close()
+            except Exception:
+                pass
+            self.cluster_client = None
+        ValkeyTestCase.teardown(self)
