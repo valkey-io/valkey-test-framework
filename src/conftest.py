@@ -84,6 +84,22 @@ class PortTracker(object):
             lockfile.close()
             del self.open_and_locked_files[port]
 
+    def release_port(self, port):
+        """Release all 3 locks for a port (base, bus, coordinator).
+
+        Safe to call multiple times — silently no-ops if already released.
+        """
+        for offset in (
+            0,
+            self.CLUSTER_BUS_PORT_OFFSET,
+            self.SEARCH_COORDINATOR_PORT_OFFSET,
+        ):
+            p = port + offset
+            lockfile = self.open_and_locked_files.get(p)
+            if lockfile:
+                self._try_remove(lockfile)
+                del self.open_and_locked_files[p]
+
     def get_unused_port(self):
         for r in range(PortTracker.MAX_RETRIES):
             port = self._next_port()

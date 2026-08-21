@@ -67,4 +67,26 @@ class TestExamplePerClassSetup(ExampleTestCaseBase):
         client.execute_command("SET K V")
 ```
 
-For more examples, refer to the `tests` directory of this package.
+**Testing Cluster Mode Enabled (CME)**
+
+To test against a Valkey cluster, inherit `ClusterTestCase` instead of `ValkeyTestCase`. Call `setup_cluster(num_shards, num_replicas_per_shard)` to bootstrap a cluster: it starts all nodes, assigns slots, attaches replicas, waits until the cluster state is `ok`, and returns a client that follows `MOVED`/`ASK` redirections. The cluster is torn down automatically after each test.
+
+```
+from valkey_test_case import ClusterTestCase, ClusterInfo
+
+class TestExampleCluster(ClusterTestCase):
+    def test_cluster_read_write(self):
+        self.server_path = "/path_to_your_valkey_server_binary"
+
+        # 3 primaries, each with 1 replica (6 nodes total)
+        client = self.setup_cluster(num_shards=3, num_replicas_per_shard=1)
+
+        client.set("key", "value")
+        assert client.get("key") == b"value"
+
+        # self.nodes holds every ClusterNodeHandle for direct inspection
+        for node in self.nodes:
+            assert ClusterInfo(node.client.cluster("INFO")).is_cluster_ok()
+```
+
+To apply startup arguments (modules, configs) to every node, set `self.args` inside the test before calling `setup_cluster`.
