@@ -588,7 +588,7 @@ class ValkeyTestCase(ValkeyTestCaseBase):
     def wait_for_replicas(self, n):
         self.server.wait_for_replicas(n)
 
-    def teardown(self):
+    def teardown_method(self):
         for server in self.server_list:
             if server:
                 server.exit()
@@ -643,10 +643,10 @@ class ReplicationTestCase(ValkeyTestCase):
             self.waitForReplicaToSyncUp(self.replicas[i])
         return self.replicas
 
-    def teardown(self):
+    def teardown_method(self):
         if not self.skip_teardown:
             self.destroy_replicas()
-            ValkeyTestCase.teardown(self)
+            ValkeyTestCase.teardown_method(self)
 
     def _create_replica(self, primaryhost, primaryport, server_path):
         return ValkeyReplica(
